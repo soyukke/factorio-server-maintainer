@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/gsm-core",
+    "crates/ctrlc-helper",
+    "crates/valheim",
+    "crates/gui-slint",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "process", "io-util", "time"] }
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Used for bootstrapping SteamCMD when steamcmd.exe is missing.
+ureq = "2"
+zip = "2"
+
+# Slint (gui-slint only). femtovg renderer is the primary; we pin the
+# feature set so multi-window scenarios (BackupWindow / WorldSettingsWindow)
+# don't lose redraw events on Windows 10/11.
+slint = { version = "1.8", default-features = false, features = [
+    "std",
+    "backend-winit",
+    "renderer-femtovg",
+    "renderer-software",
+    "compat-1-2",
+] }
+slint-build = "1.8"
+
+# Windows. Pinned to 0.52 because 0.59 reorganised some Win32::System::Threading
+# bindings (e.g. CreateProcessW resolution); 0.52 is a known-good layout for
+# the FFI we use in ctrlc-helper and gsm-core::process.
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

@@ -1,0 +1,1265 @@
+import {
+    Button, VerticalBox, HorizontalBox, ScrollView, GroupBox,
+    LineEdit, TextEdit, CheckBox, ComboBox, ProgressIndicator,
+    Palette
+} from "std-widgets.slint";
+
+// Project-wide accent palette layered on top of Slint's dark Palette. Used
+// by Section headers, LabelCell hovers, CategoryButton highlights, popup
+// borders. Pulled from the ARKSA sister project for visual consistency.
+export global AppTheme {
+    out property <color> accent: #1ABC9C;          // turquoise
+    out property <color> accent-hover: #16A085;
+    out property <color> accent-soft: #1ABC9C40;   // ~25% alpha
+    out property <color> header-bg: #0F2A2E;       // very dark teal
+    out property <color> header-fg: #1ABC9C;       // turquoise text
+    out property <color> border: #1ABC9C66;        // turquoise w/ alpha
+    out property <color> on-accent: #0E2628;       // dark text on accent bg
+}
+
+// Row models for the Players and Backups sections. Rust populates the
+// matching `[PlayerRow]` / `[BackupRow]` properties with localised content.
+export struct PlayerRow {
+    steam_id: string,
+    joined_at: string,
+}
+
+export struct BackupRow {
+    id: string,
+    timestamp: string,
+    size: string,
+    // 0=Auto, 1=Manual, 2=PreRollback. Echo of gsm_core::BackupKind.
+    kind: int,
+    selected: bool,
+}
+
+// Sectioned content block. Renders a turquoise-accented header bar with
+// `title` on top and the slot's children below in a padded body. Border
+// + corner radius pulled from the ARKSA project so visual rhythm matches.
+component Section inherits VerticalBox {
+    in property <string> title;
+    spacing: 0;
+    padding: 0;
+
+    Rectangle {
+        height: 28px;
+        background: AppTheme.header-bg;
+        border-top-left-radius: 6px;
+        border-top-right-radius: 6px;
+        border-color: AppTheme.border;
+        border-width: 1px;
+        HorizontalBox {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 0;
+            padding-bottom: 0;
+            Text {
+                text: root.title;
+                color: AppTheme.header-fg;
+                font-weight: 700;
+                font-size: 12px;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+        }
+    }
+    Rectangle {
+        background: Palette.alternate-background;
+        border-bottom-left-radius: 6px;
+        border-bottom-right-radius: 6px;
+        border-color: AppTheme.border;
+        border-width: 1px;
+        VerticalBox {
+            padding: 10px;
+            spacing: 8px;
+            @children
+        }
+    }
+}
+
+// Sidebar tab entry used by the World Settings / Backup windows (PASS 2/3).
+// Defined here so the reusable component lives next to its siblings.
+component CategoryButton inherits Rectangle {
+    in property <string> label;
+    in property <int> index;
+    in property <int> current-index;
+    callback clicked;
+
+    height: 30px;
+    border-radius: 4px;
+    background: root.index == root.current-index
+        ? AppTheme.accent
+        : (touch.has-hover ? AppTheme.accent-soft : transparent);
+
+    HorizontalBox {
+        padding-left: 12px;
+        padding-right: 8px;
+        Text {
+            text: root.label;
+            color: root.index == root.current-index
+                ? AppTheme.on-accent
+                : Palette.foreground;
+            font-weight: root.index == root.current-index ? 700 : 400;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// Standalone Window for World Settings. Sidebar + right pane pattern from
+// ARKSA: each modifier gets its own page with a ComboBox + description.
+// On open Rust copies the live indices from MainWindow; on Apply they're
+// copied back; Cancel discards.
+export component WorldSettingsWindow inherits Window {
+    title: root.t-window-title;
+    preferred-width: 760px;
+    preferred-height: 520px;
+    min-width: 600px;
+    min-height: 380px;
+    background: Palette.background;
+
+    // ── Localised labels ───────────────────────────────────────────────
+    in property <string> t-window-title;
+    in property <string> t-btn-done;
+    in property <string> t-btn-cancel;
+    in property <string> t-lbl-preset;
+    in property <string> t-lbl-combat;
+    in property <string> t-lbl-deathpenalty;
+    in property <string> t-lbl-resources;
+    in property <string> t-lbl-raids;
+    in property <string> t-lbl-portals;
+    in property <string> t-preset-description;
+    in property <string> t-combat-description;
+    in property <string> t-deathpenalty-description;
+    in property <string> t-resources-description;
+    in property <string> t-raids-description;
+    in property <string> t-portals-description;
+
+    // Keys page (7th category)
+    in property <string> t-lbl-keys;
+    in property <string> t-keys-description;
+    in property <string> t-key-nobuildcost;
+    in property <string> t-key-nobuildcost-desc;
+    in property <string> t-key-passivemobs;
+    in property <string> t-key-passivemobs-desc;
+    in property <string> t-key-nomap;
+    in property <string> t-key-nomap-desc;
+    in property <string> t-key-noportals;
+    in property <string> t-key-noportals-desc;
+    in property <string> t-key-playerevents;
+    in property <string> t-key-playerevents-desc;
+    in property <string> t-key-showenemyhud;
+    in property <string> t-key-showenemyhud-desc;
+    in property <string> t-key-devcommands;
+    in property <string> t-key-devcommands-desc;
+    in-out property <bool> key-nobuildcost: false;
+    in-out property <bool> key-passivemobs: false;
+    in-out property <bool> key-nomap: false;
+    in-out property <bool> key-noportals: false;
+    in-out property <bool> key-playerevents: false;
+    in-out property <bool> key-showenemyhud: false;
+    in-out property <bool> key-devcommands: false;
+
+    // ── ComboBox option models (set from Rust per language) ───────────
+    in-out property <[string]> preset-options;
+    in-out property <[string]> combat-options;
+    in-out property <[string]> deathpenalty-options;
+    in-out property <[string]> resources-options;
+    in-out property <[string]> raids-options;
+    in-out property <[string]> portals-options;
+
+    // ── Currently-selected indices (live edit; commit on Apply) ──────
+    in-out property <int> preset-index: 0;
+    in-out property <int> mod-combat-index: 0;
+    in-out property <int> mod-deathpenalty-index: 0;
+    in-out property <int> mod-resources-index: 0;
+    in-out property <int> mod-raids-index: 0;
+    in-out property <int> mod-portals-index: 0;
+
+    // 0=Preset, 1=Combat, 2=Deathpenalty, 3=Resources, 4=Raids, 5=Portals
+    in-out property <int> current-category: 0;
+
+    callback apply-clicked();
+    callback cancel-clicked();
+
+    VerticalBox {
+        padding: 12px;
+        spacing: 10px;
+
+        HorizontalBox {
+            vertical-stretch: 1;
+            spacing: 0;
+            padding: 0;
+
+            // Sidebar
+            Rectangle {
+                width: 170px;
+                background: Palette.alternate-background;
+                border-color: AppTheme.border;
+                border-width: 1px;
+                border-radius: 6px;
+                VerticalBox {
+                    padding: 6px;
+                    spacing: 2px;
+                    CategoryButton { index: 0; current-index: root.current-category; label: root.t-lbl-preset;        clicked => { root.current-category = 0; } }
+                    CategoryButton { index: 1; current-index: root.current-category; label: root.t-lbl-combat;        clicked => { root.current-category = 1; } }
+                    CategoryButton { index: 2; current-index: root.current-category; label: root.t-lbl-deathpenalty;  clicked => { root.current-category = 2; } }
+                    CategoryButton { index: 3; current-index: root.current-category; label: root.t-lbl-resources;     clicked => { root.current-category = 3; } }
+                    CategoryButton { index: 4; current-index: root.current-category; label: root.t-lbl-raids;         clicked => { root.current-category = 4; } }
+                    CategoryButton { index: 5; current-index: root.current-category; label: root.t-lbl-portals;       clicked => { root.current-category = 5; } }
+                    CategoryButton { index: 6; current-index: root.current-category; label: root.t-lbl-keys;          clicked => { root.current-category = 6; } }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+
+            // Right pane — one panel per category.
+            Rectangle {
+                horizontal-stretch: 1;
+                background: Palette.alternate-background;
+                border-color: AppTheme.border;
+                border-width: 1px;
+                border-radius: 6px;
+                VerticalBox {
+                    padding: 16px;
+                    spacing: 10px;
+
+                    if root.current-category == 0: VerticalBox {
+                        spacing: 8px;
+                        Text { text: root.t-lbl-preset; color: AppTheme.accent; font-weight: 700; font-size: 14px; }
+                        ComboBox {
+                            model: root.preset-options;
+                            current-index <=> root.preset-index;
+                        }
+                        Text { text: root.t-preset-description; color: Palette.foreground; wrap: word-wrap; font-size: 12px; }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                    if root.current-category == 1: VerticalBox {
+                        spacing: 8px;
+                        Text { text: root.t-lbl-combat; color: AppTheme.accent; font-weight: 700; font-size: 14px; }
+                        ComboBox {
+                            model: root.combat-options;
+                            current-index <=> root.mod-combat-index;
+                        }
+                        Text { text: root.t-combat-description; color: Palette.foreground; wrap: word-wrap; font-size: 12px; }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                    if root.current-category == 2: VerticalBox {
+                        spacing: 8px;
+                        Text { text: root.t-lbl-deathpenalty; color: AppTheme.accent; font-weight: 700; font-size: 14px; }
+                        ComboBox {
+                            model: root.deathpenalty-options;
+                            current-index <=> root.mod-deathpenalty-index;
+                        }
+                        Text { text: root.t-deathpenalty-description; color: Palette.foreground; wrap: word-wrap; font-size: 12px; }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                    if root.current-category == 3: VerticalBox {
+                        spacing: 8px;
+                        Text { text: root.t-lbl-resources; color: AppTheme.accent; font-weight: 700; font-size: 14px; }
+                        ComboBox {
+                            model: root.resources-options;
+                            current-index <=> root.mod-resources-index;
+                        }
+                        Text { text: root.t-resources-description; color: Palette.foreground; wrap: word-wrap; font-size: 12px; }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                    if root.current-category == 4: VerticalBox {
+                        spacing: 8px;
+                        Text { text: root.t-lbl-raids; color: AppTheme.accent; font-weight: 700; font-size: 14px; }
+                        ComboBox {
+                            model: root.raids-options;
+                            current-index <=> root.mod-raids-index;
+                        }
+                        Text { text: root.t-raids-description; color: Palette.foreground; wrap: word-wrap; font-size: 12px; }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                    if root.current-category == 5: VerticalBox {
+                        spacing: 8px;
+                        Text { text: root.t-lbl-portals; color: AppTheme.accent; font-weight: 700; font-size: 14px; }
+                        ComboBox {
+                            model: root.portals-options;
+                            current-index <=> root.mod-portals-index;
+                        }
+                        Text { text: root.t-portals-description; color: Palette.foreground; wrap: word-wrap; font-size: 12px; }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                    if root.current-category == 6: VerticalBox {
+                        spacing: 8px;
+                        Text { text: root.t-lbl-keys; color: AppTheme.accent; font-weight: 700; font-size: 14px; }
+                        Text { text: root.t-keys-description; color: #7c8a93; wrap: word-wrap; font-size: 11px; }
+                        ScrollView {
+                            vertical-stretch: 1;
+                            VerticalBox {
+                                spacing: 10px;
+                                VerticalBox { spacing: 1px;
+                                    CheckBox { text: root.t-key-nobuildcost; checked <=> root.key-nobuildcost; }
+                                    Text { text: root.t-key-nobuildcost-desc; color: #7c8a93; font-size: 11px; wrap: word-wrap; }
+                                }
+                                VerticalBox { spacing: 1px;
+                                    CheckBox { text: root.t-key-passivemobs; checked <=> root.key-passivemobs; }
+                                    Text { text: root.t-key-passivemobs-desc; color: #7c8a93; font-size: 11px; wrap: word-wrap; }
+                                }
+                                VerticalBox { spacing: 1px;
+                                    CheckBox { text: root.t-key-nomap; checked <=> root.key-nomap; }
+                                    Text { text: root.t-key-nomap-desc; color: #7c8a93; font-size: 11px; wrap: word-wrap; }
+                                }
+                                VerticalBox { spacing: 1px;
+                                    CheckBox { text: root.t-key-noportals; checked <=> root.key-noportals; }
+                                    Text { text: root.t-key-noportals-desc; color: #7c8a93; font-size: 11px; wrap: word-wrap; }
+                                }
+                                VerticalBox { spacing: 1px;
+                                    CheckBox { text: root.t-key-playerevents; checked <=> root.key-playerevents; }
+                                    Text { text: root.t-key-playerevents-desc; color: #7c8a93; font-size: 11px; wrap: word-wrap; }
+                                }
+                                VerticalBox { spacing: 1px;
+                                    CheckBox { text: root.t-key-showenemyhud; checked <=> root.key-showenemyhud; }
+                                    Text { text: root.t-key-showenemyhud-desc; color: #7c8a93; font-size: 11px; wrap: word-wrap; }
+                                }
+                                VerticalBox { spacing: 1px;
+                                    CheckBox { text: root.t-key-devcommands; checked <=> root.key-devcommands; }
+                                    Text { text: root.t-key-devcommands-desc; color: #7c8a93; font-size: 11px; wrap: word-wrap; }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalBox {
+            spacing: 8px;
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                text: root.t-btn-cancel;
+                clicked => { root.cancel-clicked(); }
+            }
+            Button {
+                text: root.t-btn-done;
+                primary: true;
+                clicked => { root.apply-clicked(); }
+            }
+        }
+    }
+}
+
+// Standalone Window for backup management. Shown via `BackupWindow::show()`
+// from Rust when the user clicks "バックアップ管理を開く..." on the main
+// page. All persistent state (selections, sort order) lives on the Rust
+// side; this component holds only display-time properties.
+export component BackupWindow inherits Window {
+    title: root.t-backup-title;
+    preferred-width: 760px;
+    preferred-height: 580px;
+    min-width: 600px;
+    min-height: 420px;
+    background: Palette.background;
+
+    // ── Localised strings ─────────────────────────────────────────────
+    in property <string> t-backup-title;
+    in property <string> t-sidebar-paths;
+    in property <string> t-sidebar-list;
+    in property <string> t-tab-manual;
+    in property <string> t-tab-pre-rollback;
+    in property <string> t-col-when;
+    in property <string> t-col-size;
+    in property <string> t-btn-close;
+    in property <string> t-btn-refresh;
+    in property <string> t-btn-take-snapshot;
+    in property <string> t-btn-rollback;
+    in property <string> t-btn-delete-selected;
+    in property <string> t-confirm-rollback;
+    in property <string> t-confirm-delete;
+    in property <string> t-btn-confirm;
+    in property <string> t-btn-cancel;
+    in property <string> t-no-backups;
+    in property <string> t-lbl-world;
+    in property <string> t-lbl-save-dir;
+    in property <string> t-lbl-backup-dir;
+
+    // ── Context (display-only) ────────────────────────────────────────
+    in property <string> world-name;
+    in property <string> save-dir-display;
+    in property <string> backup-dir-display;
+
+    // ── Data lists ─────────────────────────────────────────────────────
+    in property <[BackupRow]> snapshots-manual: [];
+    in property <[BackupRow]> snapshots-pre-rollback: [];
+    in property <int> manual-selected-count: 0;
+    in property <int> pre-rollback-selected-count: 0;
+
+    // ── UI state ──────────────────────────────────────────────────────
+    in-out property <int> current-category: 1;       // 0=Paths, 1=List
+    in-out property <int> current-subtab: 0;          // 0=Manual, 1=PreRollback
+    in-out property <int> sort-column: 0;             // 0=when, 1=size
+    in-out property <bool> sort-desc: true;
+    in-out property <string> pending-rollback-id: "";
+    in-out property <string> pending-rollback-when: "";
+    in-out property <int> pending-delete-list: -1;    // -1 = none
+    in-out property <int> pending-delete-count: 0;
+
+    in property <bool> busy: false;
+    in property <bool> server-controls-enabled: false;
+
+    // ── Callbacks (host wires) ────────────────────────────────────────
+    callback close-clicked();
+    callback refresh-clicked();
+    callback take-snapshot-clicked();
+    callback toggle-row-selected(int, int);  // (list_kind, idx)
+    callback sort-by-clicked(int);           // (column)
+    callback rollback-confirmed(string);     // (backup_id)
+    callback delete-selected-confirmed(int); // (list_kind)
+    callback request-delete-selected(int);   // (list_kind) — asks host to fill pending-delete-count
+
+    VerticalBox {
+        padding: 12px;
+        spacing: 10px;
+
+        HorizontalBox {
+            vertical-stretch: 1;
+            spacing: 0;
+            padding: 0;
+
+            // ── Left sidebar ────────────────────────────────────────
+            Rectangle {
+                width: 140px;
+                background: Palette.alternate-background;
+                border-color: AppTheme.border;
+                border-width: 1px;
+                border-radius: 6px;
+                VerticalBox {
+                    padding: 6px;
+                    spacing: 2px;
+                    CategoryButton {
+                        index: 0;
+                        current-index: root.current-category;
+                        label: root.t-sidebar-paths;
+                        clicked => { root.current-category = 0; }
+                    }
+                    CategoryButton {
+                        index: 1;
+                        current-index: root.current-category;
+                        label: root.t-sidebar-list;
+                        clicked => { root.current-category = 1; }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+
+            // ── Right content pane ──────────────────────────────────
+            VerticalBox {
+                horizontal-stretch: 1;
+                padding-left: 12px;
+                padding-right: 0;
+                spacing: 8px;
+
+                // Paths panel
+                if root.current-category == 0: Rectangle {
+                    background: Palette.alternate-background;
+                    border-color: AppTheme.border;
+                    border-width: 1px;
+                    border-radius: 6px;
+                    VerticalBox {
+                        padding: 12px;
+                        spacing: 8px;
+                        HorizontalBox {
+                            spacing: 8px;
+                            Text { text: root.t-lbl-world; color: AppTheme.accent; min-width: 100px; vertical-alignment: center; }
+                            Text { text: root.world-name; color: Palette.foreground; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                        }
+                        HorizontalBox {
+                            spacing: 8px;
+                            Text { text: root.t-lbl-save-dir; color: AppTheme.accent; min-width: 100px; vertical-alignment: center; }
+                            Text { text: root.save-dir-display; color: Palette.foreground; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                        }
+                        HorizontalBox {
+                            spacing: 8px;
+                            Text { text: root.t-lbl-backup-dir; color: AppTheme.accent; min-width: 100px; vertical-alignment: center; }
+                            Text { text: root.backup-dir-display; color: Palette.foreground; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+
+                // List panel
+                if root.current-category == 1: VerticalBox {
+                    spacing: 8px;
+
+                    // Sub-tabs + action buttons
+                    HorizontalBox {
+                        spacing: 4px;
+                        Rectangle {
+                            background: root.current-subtab == 0 ? AppTheme.accent : AppTheme.accent-soft;
+                            border-radius: 4px;
+                            height: 28px;
+                            min-width: 120px;
+                            HorizontalBox {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                Text {
+                                    text: root.t-tab-manual;
+                                    color: root.current-subtab == 0 ? AppTheme.on-accent : Palette.foreground;
+                                    font-weight: root.current-subtab == 0 ? 700 : 400;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            TouchArea { clicked => { root.current-subtab = 0; } }
+                        }
+                        Rectangle {
+                            background: root.current-subtab == 1 ? AppTheme.accent : AppTheme.accent-soft;
+                            border-radius: 4px;
+                            height: 28px;
+                            min-width: 140px;
+                            HorizontalBox {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                Text {
+                                    text: root.t-tab-pre-rollback;
+                                    color: root.current-subtab == 1 ? AppTheme.on-accent : Palette.foreground;
+                                    font-weight: root.current-subtab == 1 ? 700 : 400;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            TouchArea { clicked => { root.current-subtab = 1; } }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Button {
+                            text: root.t-btn-take-snapshot;
+                            primary: true;
+                            enabled: root.server-controls-enabled && !root.busy && root.current-subtab == 0;
+                            clicked => { root.take-snapshot-clicked(); }
+                        }
+                        Button {
+                            text: root.t-btn-refresh;
+                            enabled: !root.busy;
+                            clicked => { root.refresh-clicked(); }
+                        }
+                    }
+
+                    // Sort header
+                    Rectangle {
+                        background: AppTheme.header-bg;
+                        border-radius: 4px;
+                        height: 26px;
+                        HorizontalBox {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            spacing: 6px;
+                            Rectangle { width: 30px; }
+                            Rectangle {
+                                horizontal-stretch: 2;
+                                HorizontalBox {
+                                    padding: 0;
+                                    Text {
+                                        text: root.t-col-when + (root.sort-column == 0 ? (root.sort-desc ? " ▼" : " ▲") : "");
+                                        color: AppTheme.accent;
+                                        font-weight: 700;
+                                        font-size: 11px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                TouchArea { clicked => { root.sort-by-clicked(0); } }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                HorizontalBox {
+                                    padding: 0;
+                                    Text {
+                                        text: root.t-col-size + (root.sort-column == 1 ? (root.sort-desc ? " ▼" : " ▲") : "");
+                                        color: AppTheme.accent;
+                                        font-weight: 700;
+                                        font-size: 11px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                TouchArea { clicked => { root.sort-by-clicked(1); } }
+                            }
+                            Rectangle { width: 100px; }
+                        }
+                    }
+
+                    // Rows
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalBox {
+                            padding: 0;
+                            spacing: 1px;
+                            // Manual list rows (rendered only when subtab=0)
+                            if root.current-subtab == 0: VerticalBox {
+                                padding: 0;
+                                spacing: 1px;
+                                for row[idx] in root.snapshots-manual: Rectangle {
+                                    background: row.selected ? AppTheme.accent-soft : Palette.alternate-background;
+                                    border-radius: 3px;
+                                    height: 32px;
+                                    HorizontalBox {
+                                        spacing: 6px;
+                                        padding: 2px;
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        CheckBox {
+                                            checked: row.selected;
+                                            width: 30px;
+                                            toggled => { root.toggle-row-selected(0, idx); }
+                                        }
+                                        Text {
+                                            text: row.timestamp;
+                                            color: Palette.foreground;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 2;
+                                            font-size: 12px;
+                                        }
+                                        Text {
+                                            text: row.size;
+                                            color: #7c8a93;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            font-size: 12px;
+                                        }
+                                        Button {
+                                            text: root.t-btn-rollback;
+                                            enabled: root.server-controls-enabled && !root.busy;
+                                            clicked => {
+                                                root.pending-rollback-id = row.id;
+                                                root.pending-rollback-when = row.timestamp;
+                                            }
+                                        }
+                                    }
+                                }
+                                if root.snapshots-manual.length == 0: Rectangle {
+                                    height: 60px;
+                                    Text {
+                                        text: root.t-no-backups;
+                                        color: #7c8a93;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                            // PreRollback list rows
+                            if root.current-subtab == 1: VerticalBox {
+                                padding: 0;
+                                spacing: 1px;
+                                for row[idx] in root.snapshots-pre-rollback: Rectangle {
+                                    background: row.selected ? AppTheme.accent-soft : Palette.alternate-background;
+                                    border-radius: 3px;
+                                    height: 32px;
+                                    HorizontalBox {
+                                        spacing: 6px;
+                                        padding: 2px;
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        CheckBox {
+                                            checked: row.selected;
+                                            width: 30px;
+                                            toggled => { root.toggle-row-selected(1, idx); }
+                                        }
+                                        Text {
+                                            text: row.timestamp;
+                                            color: Palette.foreground;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 2;
+                                            font-size: 12px;
+                                        }
+                                        Text {
+                                            text: row.size;
+                                            color: #7c8a93;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            font-size: 12px;
+                                        }
+                                        Button {
+                                            text: root.t-btn-rollback;
+                                            enabled: root.server-controls-enabled && !root.busy;
+                                            clicked => {
+                                                root.pending-rollback-id = row.id;
+                                                root.pending-rollback-when = row.timestamp;
+                                            }
+                                        }
+                                    }
+                                }
+                                if root.snapshots-pre-rollback.length == 0: Rectangle {
+                                    height: 60px;
+                                    Text {
+                                        text: root.t-no-backups;
+                                        color: #7c8a93;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Confirmation strips (rollback / bulk delete) ───────────────
+        if root.pending-rollback-id != "" : Rectangle {
+            background: AppTheme.accent-soft;
+            border-radius: 4px;
+            border-color: AppTheme.accent;
+            border-width: 1px;
+            HorizontalBox {
+                padding: 8px;
+                spacing: 8px;
+                Text {
+                    text: root.t-confirm-rollback + " (" + root.pending-rollback-when + ")";
+                    color: AppTheme.accent;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    wrap: word-wrap;
+                }
+                Button {
+                    text: root.t-btn-cancel;
+                    clicked => {
+                        root.pending-rollback-id = "";
+                        root.pending-rollback-when = "";
+                    }
+                }
+                Button {
+                    text: root.t-btn-confirm;
+                    primary: true;
+                    clicked => {
+                        root.rollback-confirmed(root.pending-rollback-id);
+                        root.pending-rollback-id = "";
+                        root.pending-rollback-when = "";
+                    }
+                }
+            }
+        }
+
+        if root.pending-delete-list >= 0 : Rectangle {
+            background: AppTheme.accent-soft;
+            border-radius: 4px;
+            border-color: AppTheme.accent;
+            border-width: 1px;
+            HorizontalBox {
+                padding: 8px;
+                spacing: 8px;
+                Text {
+                    text: root.t-confirm-delete + " (" + root.pending-delete-count + ")";
+                    color: AppTheme.accent;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    wrap: word-wrap;
+                }
+                Button {
+                    text: root.t-btn-cancel;
+                    clicked => { root.pending-delete-list = -1; }
+                }
+                Button {
+                    text: root.t-btn-confirm;
+                    primary: true;
+                    clicked => {
+                        root.delete-selected-confirmed(root.pending-delete-list);
+                        root.pending-delete-list = -1;
+                    }
+                }
+            }
+        }
+
+        // ── Footer: bulk delete + close ────────────────────────────
+        HorizontalBox {
+            spacing: 8px;
+            Button {
+                text: root.t-btn-delete-selected;
+                enabled: !root.busy
+                    && root.current-category == 1
+                    && (root.current-subtab == 0
+                            ? root.manual-selected-count > 0
+                            : root.pre-rollback-selected-count > 0);
+                clicked => {
+                    root.request-delete-selected(root.current-subtab);
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                text: root.t-btn-close;
+                clicked => { root.close-clicked(); }
+            }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Valheim Server Manager";
+    preferred-width: 960px;
+    preferred-height: 820px;
+    min-width: 780px;
+    min-height: 600px;
+    background: #0a1218;
+
+    // Note: std-widgets follow the OS color scheme automatically (fluent
+    // style). On a Windows host in dark mode the buttons/LineEdits/etc.
+    // pick up dark variants. If the host is in light mode the std-widgets
+    // will look light against our dark background; we'd then need custom
+    // styled widgets — leaving that until it's observed.
+
+    // ===== Localised UI strings (set from Rust) =====
+    in property <string> t-app-title;
+    in property <string> t-group-setup;
+    in property <string> t-group-paths;
+    in property <string> t-group-server;
+    in property <string> t-group-manager;
+    in property <string> t-group-status;
+    in property <string> t-group-operation;
+    in property <string> t-group-log;
+
+    in property <string> t-lbl-language;
+
+    in property <string> t-server-prefix;
+    in property <string> t-btn-start;
+    in property <string> t-btn-stop;
+    in property <string> t-btn-update;
+    in property <string> t-btn-save;
+
+    in property <string> t-lbl-steamcmd;
+    in property <string> t-lbl-server-dir;
+    in property <string> t-lbl-save-dir;
+    in property <string> t-lbl-backup-dir;
+    in property <string> t-lbl-log-file;
+    in property <string> t-btn-browse;
+
+    in property <string> t-lbl-name;
+    in property <string> t-lbl-world;
+    in property <string> t-lbl-password;
+    in property <string> t-lbl-port;
+    in property <string> t-lbl-public;
+    in property <string> t-lbl-save-interval;
+    in property <string> t-lbl-backups;
+
+    // World modifier selected indices. The dedicated WorldSettingsWindow
+    // edits these (after a copy in/out on open/done); Rust reads them
+    // in build_config_from_ui when persisting config.toml.
+    in-out property <int> preset-index: 0;
+    in-out property <int> mod-combat-index: 0;
+    in-out property <int> mod-deathpenalty-index: 0;
+    in-out property <int> mod-resources-index: 0;
+    in-out property <int> mod-raids-index: 0;
+    in-out property <int> mod-portals-index: 0;
+    // World keys (boolean -setkey toggles). Same lifecycle as modifier
+    // indices above — edited in WorldSettingsWindow, persisted via main.
+    in-out property <bool> key-nobuildcost: false;
+    in-out property <bool> key-passivemobs: false;
+    in-out property <bool> key-nomap: false;
+    in-out property <bool> key-noportals: false;
+    in-out property <bool> key-playerevents: false;
+    in-out property <bool> key-showenemyhud: false;
+    in-out property <bool> key-devcommands: false;
+    // Entry button for the WorldSettingsWindow.
+    in property <string> t-btn-open-world;
+    callback open-world-clicked();
+
+    in property <string> t-lbl-graceful-stop;
+    in property <string> t-chk-auto-backup;
+    in property <string> t-lbl-backup-short;
+    in property <string> t-lbl-backup-long;
+    in property <string> t-backup-intervals-hint;
+    in-out property <string> backup-short-secs: "7200";
+    in-out property <string> backup-long-secs: "43200";
+
+    // Players / Backups translation strings
+    in property <string> t-group-players;
+    in property <string> t-group-backup;
+    in property <string> t-btn-refresh;
+    in property <string> t-btn-open-backup;
+    in property <string> t-no-players;
+    in property <string> t-no-backups;
+    in-out property <string> players-count-text;
+    in-out property <string> backups-count-text;
+
+    in-out property <[PlayerRow]> player-rows;
+
+    // Connection (public address) section
+    in property <string> t-group-connection;
+    in property <string> t-lbl-public-address;
+    in property <string> t-public-address-hint;
+    in property <string> t-btn-copy;
+    in-out property <string> public-address: "";
+    in-out property <string> public-address-status: "";
+    callback public-address-accepted(string);
+    callback copy-public-address();
+
+    // ===== Runtime state =====
+    in-out property <string> status-text;
+    in-out property <string> log-text: "";
+    in-out property <string> paths-summary: "";
+    in-out property <string> params-summary: "";
+    in-out property <bool> server-controls-enabled: false;
+    // True while a long-running op is in flight (Starting / Stopping /
+    // Updating). Disables every action button and shows a progress bar.
+    in-out property <bool> busy: false;
+    // True only when the server is actually accepting connections (Running).
+    // Used to flip Start <-> Stop button enablement.
+    in-out property <bool> server-running: false;
+
+    in-out property <string> steamcmd-path: "";
+    in-out property <string> server-dir: "";
+    in-out property <string> save-dir: "";
+    in-out property <string> backup-dir: "";
+    in-out property <string> log-file: "";
+    in-out property <string> server-name: "";
+    in-out property <string> world-name: "";
+    in-out property <string> server-password: "";
+    in-out property <string> server-port: "";
+    in-out property <string> server-public: "";
+    in-out property <string> save-interval: "";
+    in-out property <string> backup-count: "";
+    in-out property <string> graceful-stop-timeout-secs: "";
+    in-out property <bool> auto-backup-before-update: true;
+    in-out property <string> error-text: "";
+
+    // 0 = ja, 1 = en
+    in-out property <int> language-index: 0;
+
+    // ===== Callbacks =====
+    callback start-clicked();
+    callback stop-clicked();
+    callback update-clicked();
+    callback save-settings();
+    callback browse-path(string);
+    callback language-changed(int);
+
+    callback refresh-backups-clicked();
+    callback open-backup-clicked();
+
+    // Reusable widths
+    property <length> label-w: 220px;
+    property <length> label-w-wide: 280px;
+
+    ScrollView {
+        VerticalBox {
+            padding: 16px;
+            spacing: 14px;
+
+            // ----- Setup -----
+            Section {
+                title: root.t-group-setup;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: root.t-lbl-language;
+                        color: #cfd5db;
+                        vertical-alignment: center;
+                        width: root.label-w;
+                    }
+                    ComboBox {
+                        model: ["日本語", "English"];
+                        current-index: root.language-index;
+                        selected(value) => {
+                            root.language-changed(value == "日本語" ? 0 : 1);
+                        }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+            }
+
+            // ----- Paths -----
+            Section {
+                title: root.t-group-paths;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: root.t-lbl-steamcmd; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    LineEdit { text <=> root.steamcmd-path; horizontal-stretch: 1; }
+                    Button { text: root.t-btn-browse; clicked => { root.browse-path("steamcmd"); } }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: root.t-lbl-server-dir; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    LineEdit { text <=> root.server-dir; horizontal-stretch: 1; }
+                    Button { text: root.t-btn-browse; clicked => { root.browse-path("server_dir"); } }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: root.t-lbl-save-dir; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    LineEdit { text <=> root.save-dir; horizontal-stretch: 1; }
+                    Button { text: root.t-btn-browse; clicked => { root.browse-path("save_dir"); } }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: root.t-lbl-backup-dir; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    LineEdit { text <=> root.backup-dir; horizontal-stretch: 1; }
+                    Button { text: root.t-btn-browse; clicked => { root.browse-path("backup_dir"); } }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: root.t-lbl-log-file; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    LineEdit { text <=> root.log-file; horizontal-stretch: 1; }
+                    Button { text: root.t-btn-browse; clicked => { root.browse-path("log_file"); } }
+                }
+            }
+
+            // ----- Server parameters -----
+            Section {
+                title: root.t-group-server;
+
+                HorizontalLayout { spacing: 8px;
+                    Text { text: root.t-lbl-name; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    LineEdit { text <=> root.server-name; horizontal-stretch: 1; }
+                }
+                HorizontalLayout { spacing: 8px;
+                    Text { text: root.t-lbl-world; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    LineEdit { text <=> root.world-name; horizontal-stretch: 1; }
+                }
+                HorizontalLayout { spacing: 8px;
+                    Text { text: root.t-lbl-password; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    LineEdit { text <=> root.server-password; input-type: password; horizontal-stretch: 1; }
+                }
+                HorizontalLayout { spacing: 8px;
+                    Text { text: root.t-lbl-port; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    LineEdit { text <=> root.server-port; horizontal-stretch: 1; }
+                }
+                HorizontalLayout { spacing: 8px;
+                    Text { text: root.t-lbl-public; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    LineEdit { text <=> root.server-public; horizontal-stretch: 1; }
+                }
+                HorizontalLayout { spacing: 8px;
+                    Text { text: root.t-lbl-save-interval; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    LineEdit { text <=> root.save-interval; horizontal-stretch: 1; }
+                }
+                HorizontalLayout { spacing: 8px;
+                    Text { text: root.t-lbl-backups; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    LineEdit { text <=> root.backup-count; horizontal-stretch: 1; }
+                }
+            }
+
+            // ----- World settings (entry point) -----
+            // The actual editor lives in WorldSettingsWindow; here we just
+            // show a button to open it.
+            HorizontalLayout {
+                spacing: 8px;
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: root.t-btn-open-world;
+                    enabled: !root.busy;
+                    clicked => { root.open-world-clicked(); }
+                }
+            }
+
+            // ----- Manager + Save action -----
+            Section {
+                title: root.t-group-manager;
+
+                HorizontalLayout { spacing: 8px;
+                    Text {
+                        text: root.t-lbl-graceful-stop;
+                        color: #cfd5db;
+                        vertical-alignment: center;
+                        width: root.label-w-wide;
+                    }
+                    LineEdit { text <=> root.graceful-stop-timeout-secs; horizontal-stretch: 1; }
+                }
+                CheckBox {
+                    text: root.t-chk-auto-backup;
+                    checked <=> root.auto-backup-before-update;
+                }
+                HorizontalLayout { spacing: 8px;
+                    Text {
+                        text: root.t-lbl-backup-short;
+                        color: #cfd5db;
+                        vertical-alignment: center;
+                        width: root.label-w-wide;
+                    }
+                    LineEdit { text <=> root.backup-short-secs; horizontal-stretch: 1; }
+                }
+                HorizontalLayout { spacing: 8px;
+                    Text {
+                        text: root.t-lbl-backup-long;
+                        color: #cfd5db;
+                        vertical-alignment: center;
+                        width: root.label-w-wide;
+                    }
+                    LineEdit { text <=> root.backup-long-secs; horizontal-stretch: 1; }
+                }
+                Text {
+                    text: root.t-backup-intervals-hint;
+                    color: #7c8a93;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: root.error-text;
+                    color: #ff5555;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Rectangle { horizontal-stretch: 1; }
+                    Button {
+                        text: root.t-btn-save;
+                        primary: true;
+                        // Saving rewrites config.toml and respawns the exe
+                        // so we must not do it while the server is running
+                        // or any other op is in flight.
+                        enabled: !root.busy && !root.server-running;
+                        clicked => { root.save-settings(); }
+                    }
+                }
+            }
+
+            // ----- Server status -----
+            Section {
+                title: root.t-group-status;
+                Text {
+                    text: root.t-server-prefix + root.status-text;
+                    color: #cfd5db;
+                    font-size: 14px;
+                    wrap: word-wrap;
+                }
+                // Indeterminate progress bar — visible only while a
+                // long-running op is happening. Slint omits the element
+                // entirely (no reserved layout space) when the condition is
+                // false, so the section collapses cleanly when idle.
+                if root.busy : ProgressIndicator {
+                    indeterminate: true;
+                    height: 6px;
+                }
+                Rectangle { height: 6px; }
+                Text { text: root.paths-summary;  color: #7c8a93; wrap: word-wrap; }
+                Rectangle { height: 6px; }
+                Text { text: root.params-summary; color: #7c8a93; wrap: word-wrap; }
+            }
+
+            // ----- Connection (public address) -----
+            Section {
+                title: root.t-group-connection;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: root.t-lbl-public-address;
+                        color: #cfd5db;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        text <=> root.public-address;
+                        placeholder-text: "例: tunnel.playit.gg:12345  /  100.x.y.z";
+                        horizontal-stretch: 1;
+                        accepted(value) => { root.public-address-accepted(value); }
+                    }
+                    Button {
+                        text: root.t-btn-copy;
+                        enabled: root.public-address != "";
+                        clicked => { root.copy-public-address(); }
+                    }
+                }
+                Text {
+                    text: root.public-address-status != ""
+                        ? root.public-address-status
+                        : root.t-public-address-hint;
+                    color: root.public-address-status != ""
+                        ? AppTheme.accent
+                        : #7c8a93;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+            }
+
+            // ----- Server operations -----
+            Section {
+                title: root.t-group-operation;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Button {
+                        text: root.t-btn-start;
+                        // Start only when config loaded, server not running,
+                        // and no other op in flight.
+                        enabled: root.server-controls-enabled && !root.busy && !root.server-running;
+                        clicked => { root.start-clicked(); }
+                    }
+                    Button {
+                        text: root.t-btn-stop;
+                        // Stop is the inverse — only when actually running.
+                        enabled: root.server-controls-enabled && !root.busy && root.server-running;
+                        clicked => { root.stop-clicked(); }
+                    }
+                    Button {
+                        text: root.t-btn-update;
+                        // Same condition as Start: must be stopped + idle.
+                        enabled: root.server-controls-enabled && !root.busy && !root.server-running;
+                        clicked => { root.update-clicked(); }
+                    }
+                }
+            }
+
+            // ----- Connected players -----
+            Section {
+                title: root.t-group-players;
+
+                Text {
+                    text: root.player-rows.length == 0 ? root.t-no-players : root.players-count-text;
+                    color: #cfd5db;
+                    wrap: word-wrap;
+                }
+
+                for row in root.player-rows : Rectangle {
+                    background: #1a242c;
+                    border-radius: 3px;
+                    HorizontalLayout {
+                        padding: 6px;
+                        spacing: 8px;
+                        Text {
+                            text: row.steam_id;
+                            color: #cfd5db;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        Text {
+                            text: row.joined_at;
+                            color: #7c8a93;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            // ----- Backups / Rollback (entry point) -----
+            // Backup management is in a separate window (BackupWindow). Here
+            // we only show the count and a button to open it.
+            Section {
+                title: root.t-group-backup;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: root.backups-count-text;
+                        color: #cfd5db;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Button {
+                        text: root.t-btn-refresh;
+                        enabled: !root.busy;
+                        clicked => { root.refresh-backups-clicked(); }
+                    }
+                    Button {
+                        text: root.t-btn-open-backup;
+                        primary: true;
+                        enabled: root.server-controls-enabled;
+                        clicked => { root.open-backup-clicked(); }
+                    }
+                }
+            }
+
+            // ----- Log -----
+            Section {
+                title: root.t-group-log;
+                // TextEdit is selectable + Ctrl+C copyable and scrolls
+                // internally. Left-aligned by default — replaces the
+                // previously centered, read-only Text.
+                TextEdit {
+                    text: root.log-text;
+                    read-only: true;
+                    wrap: word-wrap;
+                    min-height: 220px;
+                }
+            }
+        }
+    }
+}

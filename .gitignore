@@ -1,0 +1,21 @@
+# Rust build artifacts (multi-GB)
+/target/
+**/target/
+
+# Build script output kept by build.bat
+/build.log
+
+# Working-directory screenshots / scratch files (not for the repo)
+/debugs/
+
+# Editor / OS junk
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+.DS_Store
+
+# Manager-side runtime state (created by the GUI at runtime)
+state.toml
+config.toml

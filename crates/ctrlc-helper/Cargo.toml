@@ -1,0 +1,18 @@
+[package]
+name = "ctrlc-helper"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Standalone exe that sends a real Ctrl+C to another process's console (see spec §6.3)."
+
+[[bin]]
+name = "ctrlc-helper"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
