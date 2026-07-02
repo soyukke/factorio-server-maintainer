@@ -16,17 +16,23 @@ pub struct SteamCmdJob {
     pub steamcmd_exe: PathBuf,
     pub install_dir: PathBuf,
     pub app_id: u32,
+    pub username: Option<String>,
 }
 
 impl SteamCmdJob {
     /// Compose the argv exactly as documented in spec §6.1:
     /// `+force_install_dir <dir> +login anonymous +app_update <id> validate +quit`
     pub fn argv(&self) -> Vec<String> {
+        let login = self
+            .username
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("anonymous");
         vec![
             "+force_install_dir".into(),
             self.install_dir.display().to_string(),
             "+login".into(),
-            "anonymous".into(),
+            login.to_string(),
             "+app_update".into(),
             self.app_id.to_string(),
             "validate".into(),
@@ -120,18 +126,39 @@ pub async fn run(job: &SteamCmdJob, lines: mpsc::Sender<String>) -> anyhow::Resu
 
     let mut cmd = Command::new(&job.steamcmd_exe);
     cmd.args(job.argv());
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
+    let interactive = job.username.is_some();
+    if interactive {
+        cmd.stdin(std::process::Stdio::inherit());
+        cmd.stdout(std::process::Stdio::inherit());
+        cmd.stderr(std::process::Stdio::inherit());
+    } else {
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+    }
 
     #[cfg(windows)]
     {
-        // `tokio::process::Command::creation_flags` is inherent on Windows
-        // (no `CommandExt` import needed, unlike std::process::Command).
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
+        if interactive {
+            const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+            cmd.creation_flags(CREATE_NEW_CONSOLE);
+        } else {
+            // Anonymous updates need no input. Account updates may need a
+            // password or Steam Guard code, so leave their console visible.
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
     }
 
     let mut child = cmd.spawn().context("spawn steamcmd")?;
+
+    if interactive {
+        let _ = lines
+            .send("[steamcmd] interactive console opened for Steam login".into())
+            .await;
+        drop(lines);
+        let status = child.wait().await.context("wait steamcmd")?;
+        return Ok(status.code().unwrap_or(-1));
+    }
 
     let stdout = child.stdout.take().context("steamcmd stdout missing")?;
     let stderr = child.stderr.take().context("steamcmd stderr missing")?;

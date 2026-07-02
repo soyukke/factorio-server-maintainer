@@ -1,4 +1,4 @@
-import {
+﻿import {
     Button, VerticalBox, HorizontalBox, ScrollView, GroupBox,
     LineEdit, TextEdit, CheckBox, ComboBox, ProgressIndicator,
     Palette
@@ -15,6 +15,13 @@ export global AppTheme {
     out property <color> header-fg: #1ABC9C;       // turquoise text
     out property <color> border: #1ABC9C66;        // turquoise w/ alpha
     out property <color> on-accent: #0E2628;       // dark text on accent bg
+    out property <color> surface: #101820;
+    out property <color> surface-2: #17222c;
+    out property <color> text: #e6edf3;
+    out property <color> muted: #9fb0bd;
+    out property <color> ok: #4ade80;
+    out property <color> warn: #facc15;
+    out property <color> bad: #fb7185;
 }
 
 // Row models for the Players and Backups sections. Rust populates the
@@ -64,7 +71,7 @@ component Section inherits VerticalBox {
         }
     }
     Rectangle {
-        background: Palette.alternate-background;
+        background: AppTheme.surface;
         border-bottom-left-radius: 6px;
         border-bottom-right-radius: 6px;
         border-color: AppTheme.border;
@@ -73,6 +80,47 @@ component Section inherits VerticalBox {
             padding: 10px;
             spacing: 8px;
             @children
+        }
+    }
+}
+
+component StatusStep inherits Rectangle {
+    in property <string> label;
+    in property <bool> done;
+    in property <bool> active;
+
+    height: 32px;
+    horizontal-stretch: 1;
+    border-radius: 4px;
+    background: root.done
+        ? #163c2a
+        : (root.active ? #3b3415 : AppTheme.surface-2);
+    border-width: 1px;
+    border-color: root.done
+        ? AppTheme.ok
+        : (root.active ? AppTheme.warn : #32414d);
+
+    HorizontalBox {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+        Rectangle {
+            width: 10px;
+            height: 10px;
+            border-radius: 5px;
+            background: root.done
+                ? AppTheme.ok
+                : (root.active ? AppTheme.warn : #5f6f7d);
+        }
+        Text {
+            text: root.label;
+            color: root.done
+                ? AppTheme.ok
+                : (root.active ? AppTheme.warn : AppTheme.muted);
+            font-size: 12px;
+            font-weight: root.done || root.active ? 700 : 400;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
         }
     }
 }
@@ -116,13 +164,14 @@ component CategoryButton inherits Rectangle {
 // copied back; Cancel discards.
 export component WorldSettingsWindow inherits Window {
     title: root.t-window-title;
+    icon: @image-url("../../../assets/icon.png");
     preferred-width: 760px;
     preferred-height: 520px;
     min-width: 600px;
     min-height: 380px;
     background: Palette.background;
 
-    // ── Localised labels ───────────────────────────────────────────────
+    // 笏笏 Localised labels 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
     in property <string> t-window-title;
     in property <string> t-btn-done;
     in property <string> t-btn-cancel;
@@ -164,7 +213,7 @@ export component WorldSettingsWindow inherits Window {
     in-out property <bool> key-showenemyhud: false;
     in-out property <bool> key-devcommands: false;
 
-    // ── ComboBox option models (set from Rust per language) ───────────
+    // 笏笏 ComboBox option models (set from Rust per language) 笏笏笏笏笏笏笏笏笏笏笏
     in-out property <[string]> preset-options;
     in-out property <[string]> combat-options;
     in-out property <[string]> deathpenalty-options;
@@ -172,7 +221,7 @@ export component WorldSettingsWindow inherits Window {
     in-out property <[string]> raids-options;
     in-out property <[string]> portals-options;
 
-    // ── Currently-selected indices (live edit; commit on Apply) ──────
+    // 笏笏 Currently-selected indices (live edit; commit on Apply) 笏笏笏笏笏笏
     in-out property <int> preset-index: 0;
     in-out property <int> mod-combat-index: 0;
     in-out property <int> mod-deathpenalty-index: 0;
@@ -216,7 +265,7 @@ export component WorldSettingsWindow inherits Window {
                 }
             }
 
-            // Right pane — one panel per category.
+            // Right pane 窶・one panel per category.
             Rectangle {
                 horizontal-stretch: 1;
                 background: Palette.alternate-background;
@@ -347,18 +396,19 @@ export component WorldSettingsWindow inherits Window {
 }
 
 // Standalone Window for backup management. Shown via `BackupWindow::show()`
-// from Rust when the user clicks "バックアップ管理を開く..." on the main
+// from Rust when the user clicks "繝舌ャ繧ｯ繧｢繝・・邂｡逅・ｒ髢九￥..." on the main
 // page. All persistent state (selections, sort order) lives on the Rust
 // side; this component holds only display-time properties.
 export component BackupWindow inherits Window {
     title: root.t-backup-title;
+    icon: @image-url("../../../assets/icon.png");
     preferred-width: 760px;
     preferred-height: 580px;
     min-width: 600px;
     min-height: 420px;
     background: Palette.background;
 
-    // ── Localised strings ─────────────────────────────────────────────
+    // 笏笏 Localised strings 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
     in property <string> t-backup-title;
     in property <string> t-sidebar-paths;
     in property <string> t-sidebar-list;
@@ -380,18 +430,18 @@ export component BackupWindow inherits Window {
     in property <string> t-lbl-save-dir;
     in property <string> t-lbl-backup-dir;
 
-    // ── Context (display-only) ────────────────────────────────────────
+    // 笏笏 Context (display-only) 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
     in property <string> world-name;
     in property <string> save-dir-display;
     in property <string> backup-dir-display;
 
-    // ── Data lists ─────────────────────────────────────────────────────
+    // 笏笏 Data lists 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
     in property <[BackupRow]> snapshots-manual: [];
     in property <[BackupRow]> snapshots-pre-rollback: [];
     in property <int> manual-selected-count: 0;
     in property <int> pre-rollback-selected-count: 0;
 
-    // ── UI state ──────────────────────────────────────────────────────
+    // 笏笏 UI state 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
     in-out property <int> current-category: 1;       // 0=Paths, 1=List
     in-out property <int> current-subtab: 0;          // 0=Manual, 1=PreRollback
     in-out property <int> sort-column: 0;             // 0=when, 1=size
@@ -404,7 +454,7 @@ export component BackupWindow inherits Window {
     in property <bool> busy: false;
     in property <bool> server-controls-enabled: false;
 
-    // ── Callbacks (host wires) ────────────────────────────────────────
+    // 笏笏 Callbacks (host wires) 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
     callback close-clicked();
     callback refresh-clicked();
     callback take-snapshot-clicked();
@@ -412,7 +462,7 @@ export component BackupWindow inherits Window {
     callback sort-by-clicked(int);           // (column)
     callback rollback-confirmed(string);     // (backup_id)
     callback delete-selected-confirmed(int); // (list_kind)
-    callback request-delete-selected(int);   // (list_kind) — asks host to fill pending-delete-count
+    callback request-delete-selected(int);   // (list_kind) 窶・asks host to fill pending-delete-count
 
     VerticalBox {
         padding: 12px;
@@ -423,7 +473,7 @@ export component BackupWindow inherits Window {
             spacing: 0;
             padding: 0;
 
-            // ── Left sidebar ────────────────────────────────────────
+            // 笏笏 Left sidebar 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
             Rectangle {
                 width: 140px;
                 background: Palette.alternate-background;
@@ -449,7 +499,7 @@ export component BackupWindow inherits Window {
                 }
             }
 
-            // ── Right content pane ──────────────────────────────────
+            // 笏笏 Right content pane 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
             VerticalBox {
                 horizontal-stretch: 1;
                 padding-left: 12px;
@@ -554,7 +604,7 @@ export component BackupWindow inherits Window {
                                 HorizontalBox {
                                     padding: 0;
                                     Text {
-                                        text: root.t-col-when + (root.sort-column == 0 ? (root.sort-desc ? " ▼" : " ▲") : "");
+                                        text: root.t-col-when + (root.sort-column == 0 ? (root.sort-desc ? " 笆ｼ" : " 笆ｲ") : "");
                                         color: AppTheme.accent;
                                         font-weight: 700;
                                         font-size: 11px;
@@ -568,7 +618,7 @@ export component BackupWindow inherits Window {
                                 HorizontalBox {
                                     padding: 0;
                                     Text {
-                                        text: root.t-col-size + (root.sort-column == 1 ? (root.sort-desc ? " ▼" : " ▲") : "");
+                                        text: root.t-col-size + (root.sort-column == 1 ? (root.sort-desc ? " 笆ｼ" : " 笆ｲ") : "");
                                         color: AppTheme.accent;
                                         font-weight: 700;
                                         font-size: 11px;
@@ -697,7 +747,7 @@ export component BackupWindow inherits Window {
             }
         }
 
-        // ── Confirmation strips (rollback / bulk delete) ───────────────
+        // 笏笏 Confirmation strips (rollback / bulk delete) 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
         if root.pending-rollback-id != "" : Rectangle {
             background: AppTheme.accent-soft;
             border-radius: 4px;
@@ -762,7 +812,7 @@ export component BackupWindow inherits Window {
             }
         }
 
-        // ── Footer: bulk delete + close ────────────────────────────
+        // 笏笏 Footer: bulk delete + close 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
         HorizontalBox {
             spacing: 8px;
             Button {
@@ -786,7 +836,8 @@ export component BackupWindow inherits Window {
 }
 
 export component MainWindow inherits Window {
-    title: "Valheim Server Manager";
+    title: "Factorio Server Manager";
+    icon: @image-url("../../../assets/icon.png");
     preferred-width: 960px;
     preferred-height: 820px;
     min-width: 780px;
@@ -797,7 +848,7 @@ export component MainWindow inherits Window {
     // style). On a Windows host in dark mode the buttons/LineEdits/etc.
     // pick up dark variants. If the host is in light mode the std-widgets
     // will look light against our dark background; we'd then need custom
-    // styled widgets — leaving that until it's observed.
+    // styled widgets 窶・leaving that until it's observed.
 
     // ===== Localised UI strings (set from Rust) =====
     in property <string> t-app-title;
@@ -808,6 +859,9 @@ export component MainWindow inherits Window {
     in property <string> t-group-status;
     in property <string> t-group-operation;
     in property <string> t-group-log;
+    in property <string> t-progress-steamcmd;
+    in property <string> t-progress-factorio;
+    in property <string> t-progress-server;
 
     in property <string> t-lbl-language;
 
@@ -818,6 +872,7 @@ export component MainWindow inherits Window {
     in property <string> t-btn-save;
 
     in property <string> t-lbl-steamcmd;
+    in property <string> t-lbl-steam-user;
     in property <string> t-lbl-server-dir;
     in property <string> t-lbl-save-dir;
     in property <string> t-lbl-backup-dir;
@@ -831,36 +886,12 @@ export component MainWindow inherits Window {
     in property <string> t-lbl-public;
     in property <string> t-lbl-save-interval;
     in property <string> t-lbl-backups;
+    in property <string> t-lbl-dlc;
 
-    // World modifier selected indices. The dedicated WorldSettingsWindow
-    // edits these (after a copy in/out on open/done); Rust reads them
-    // in build_config_from_ui when persisting config.toml.
-    in-out property <int> preset-index: 0;
-    in-out property <int> mod-combat-index: 0;
-    in-out property <int> mod-deathpenalty-index: 0;
-    in-out property <int> mod-resources-index: 0;
-    in-out property <int> mod-raids-index: 0;
-    in-out property <int> mod-portals-index: 0;
-    // World keys (boolean -setkey toggles). Same lifecycle as modifier
-    // indices above — edited in WorldSettingsWindow, persisted via main.
-    in-out property <bool> key-nobuildcost: false;
-    in-out property <bool> key-passivemobs: false;
-    in-out property <bool> key-nomap: false;
-    in-out property <bool> key-noportals: false;
-    in-out property <bool> key-playerevents: false;
-    in-out property <bool> key-showenemyhud: false;
-    in-out property <bool> key-devcommands: false;
-    // Entry button for the WorldSettingsWindow.
-    in property <string> t-btn-open-world;
-    callback open-world-clicked();
+    in-out property <int> dlc-index: 0;
 
     in property <string> t-lbl-graceful-stop;
     in property <string> t-chk-auto-backup;
-    in property <string> t-lbl-backup-short;
-    in property <string> t-lbl-backup-long;
-    in property <string> t-backup-intervals-hint;
-    in-out property <string> backup-short-secs: "7200";
-    in-out property <string> backup-long-secs: "43200";
 
     // Players / Backups translation strings
     in property <string> t-group-players;
@@ -879,16 +910,21 @@ export component MainWindow inherits Window {
     in property <string> t-lbl-public-address;
     in property <string> t-public-address-hint;
     in property <string> t-btn-copy;
+    in property <string> t-btn-tailscale;
     in-out property <string> public-address: "";
     in-out property <string> public-address-status: "";
     callback public-address-accepted(string);
     callback copy-public-address();
+    callback use-tailscale-address();
 
     // ===== Runtime state =====
     in-out property <string> status-text;
     in-out property <string> log-text: "";
     in-out property <string> paths-summary: "";
     in-out property <string> params-summary: "";
+    in-out property <string> install-status-text: "";
+    in-out property <bool> steamcmd-ready: false;
+    in-out property <bool> factorio-ready: false;
     in-out property <bool> server-controls-enabled: false;
     // True while a long-running op is in flight (Starting / Stopping /
     // Updating). Disables every action button and shows a progress bar.
@@ -902,6 +938,7 @@ export component MainWindow inherits Window {
     in-out property <string> save-dir: "";
     in-out property <string> backup-dir: "";
     in-out property <string> log-file: "";
+    in-out property <string> steam-username: "";
     in-out property <string> server-name: "";
     in-out property <string> world-name: "";
     in-out property <string> server-password: "";
@@ -955,6 +992,20 @@ export component MainWindow inherits Window {
                         }
                     }
                     Rectangle { horizontal-stretch: 1; }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: root.t-lbl-steam-user;
+                        color: #cfd5db;
+                        vertical-alignment: center;
+                        width: root.label-w;
+                    }
+                    LineEdit {
+                        text <=> root.steam-username;
+                        placeholder-text: "anonymous";
+                        horizontal-stretch: 1;
+                    }
                 }
             }
 
@@ -1026,18 +1077,13 @@ export component MainWindow inherits Window {
                     Text { text: root.t-lbl-backups; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
                     LineEdit { text <=> root.backup-count; horizontal-stretch: 1; }
                 }
-            }
-
-            // ----- World settings (entry point) -----
-            // The actual editor lives in WorldSettingsWindow; here we just
-            // show a button to open it.
-            HorizontalLayout {
-                spacing: 8px;
-                Rectangle { horizontal-stretch: 1; }
-                Button {
-                    text: root.t-btn-open-world;
-                    enabled: !root.busy;
-                    clicked => { root.open-world-clicked(); }
+                HorizontalLayout { spacing: 8px;
+                    Text { text: root.t-lbl-dlc; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    ComboBox {
+                        model: ["Base", "Space Age"];
+                        current-index <=> root.dlc-index;
+                        horizontal-stretch: 1;
+                    }
                 }
             }
 
@@ -1058,31 +1104,6 @@ export component MainWindow inherits Window {
                     text: root.t-chk-auto-backup;
                     checked <=> root.auto-backup-before-update;
                 }
-                HorizontalLayout { spacing: 8px;
-                    Text {
-                        text: root.t-lbl-backup-short;
-                        color: #cfd5db;
-                        vertical-alignment: center;
-                        width: root.label-w-wide;
-                    }
-                    LineEdit { text <=> root.backup-short-secs; horizontal-stretch: 1; }
-                }
-                HorizontalLayout { spacing: 8px;
-                    Text {
-                        text: root.t-lbl-backup-long;
-                        color: #cfd5db;
-                        vertical-alignment: center;
-                        width: root.label-w-wide;
-                    }
-                    LineEdit { text <=> root.backup-long-secs; horizontal-stretch: 1; }
-                }
-                Text {
-                    text: root.t-backup-intervals-hint;
-                    color: #7c8a93;
-                    font-size: 11px;
-                    wrap: word-wrap;
-                }
-
                 Text {
                     text: root.error-text;
                     color: #ff5555;
@@ -1098,7 +1119,7 @@ export component MainWindow inherits Window {
                         // Saving rewrites config.toml and respawns the exe
                         // so we must not do it while the server is running
                         // or any other op is in flight.
-                        enabled: !root.busy && !root.server-running;
+                        enabled: !root.busy;
                         clicked => { root.save-settings(); }
                     }
                 }
@@ -1107,13 +1128,37 @@ export component MainWindow inherits Window {
             // ----- Server status -----
             Section {
                 title: root.t-group-status;
+                HorizontalLayout {
+                    spacing: 8px;
+                    StatusStep {
+                        label: root.t-progress-steamcmd;
+                        done: root.steamcmd-ready;
+                        active: root.busy && !root.steamcmd-ready;
+                    }
+                    StatusStep {
+                        label: root.t-progress-factorio;
+                        done: root.factorio-ready;
+                        active: root.busy && root.steamcmd-ready && !root.factorio-ready;
+                    }
+                    StatusStep {
+                        label: root.t-progress-server;
+                        done: root.server-running;
+                        active: root.busy && root.factorio-ready;
+                    }
+                }
+                Text {
+                    text: root.install-status-text;
+                    color: root.factorio-ready ? AppTheme.ok : AppTheme.warn;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
                 Text {
                     text: root.t-server-prefix + root.status-text;
-                    color: #cfd5db;
+                    color: AppTheme.text;
                     font-size: 14px;
                     wrap: word-wrap;
                 }
-                // Indeterminate progress bar — visible only while a
+                // Indeterminate progress bar 窶・visible only while a
                 // long-running op is happening. Slint omits the element
                 // entirely (no reserved layout space) when the condition is
                 // false, so the section collapses cleanly when idle.
@@ -1139,7 +1184,7 @@ export component MainWindow inherits Window {
                     }
                     LineEdit {
                         text <=> root.public-address;
-                        placeholder-text: "例: tunnel.playit.gg:12345  /  100.x.y.z";
+                        placeholder-text: "萓・ tunnel.playit.gg:12345  /  100.x.y.z";
                         horizontal-stretch: 1;
                         accepted(value) => { root.public-address-accepted(value); }
                     }
@@ -1147,6 +1192,10 @@ export component MainWindow inherits Window {
                         text: root.t-btn-copy;
                         enabled: root.public-address != "";
                         clicked => { root.copy-public-address(); }
+                    }
+                    Button {
+                        text: root.t-btn-tailscale;
+                        clicked => { root.use-tailscale-address(); }
                     }
                 }
                 Text {
@@ -1175,7 +1224,7 @@ export component MainWindow inherits Window {
                     }
                     Button {
                         text: root.t-btn-stop;
-                        // Stop is the inverse — only when actually running.
+                        // Stop is the inverse 窶・only when actually running.
                         enabled: root.server-controls-enabled && !root.busy && root.server-running;
                         clicked => { root.stop-clicked(); }
                     }
@@ -1251,7 +1300,7 @@ export component MainWindow inherits Window {
             Section {
                 title: root.t-group-log;
                 // TextEdit is selectable + Ctrl+C copyable and scrolls
-                // internally. Left-aligned by default — replaces the
+                // internally. Left-aligned by default 窶・replaces the
                 // previously centered, read-only Text.
                 TextEdit {
                     text: root.log-text;

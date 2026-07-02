@@ -1,0 +1,36 @@
+[tools]
+rust = "stable"
+just = "latest"
+
+[env]
+RUST_BACKTRACE = "1"
+
+[tasks.fmt]
+run = "just fmt"
+
+[tasks.fmt-fix]
+run = "just fmt-fix"
+
+[tasks.lint]
+run = "just lint"
+
+[tasks.test]
+run = "just test"
+
+[tasks.secrets]
+run = "just secrets"
+
+[tasks.build]
+run = "just build"
+
+[tasks.setup]
+run = "just setup"
+
+[tasks.precommit]
+run = "just precommit"
+
+[tasks.hook-install]
+run = "just hook-install"
+
+[tasks."steamcmd:install"]
+run = "just steamcmd-install"

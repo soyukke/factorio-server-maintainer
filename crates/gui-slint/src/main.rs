@@ -1,22 +1,22 @@
-// Hide the console window on Windows release builds — spec §8.1.
+// Hide the console window on Windows release builds  Espec §8.1.
 // In debug builds we keep the console so `tracing` output is visible.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod translations;
 
 use anyhow::Context;
+use factorio::FactorioServer;
 use gsm_core::{
-    AppConfig, Backup, BackupId, BackupKind, GameServerManager, Language, ManagerConfig,
-    PathsConfig, ServerConfig, ServerEvent, ServerStatus,
+    AppConfig, Backup, BackupId, BackupKind, FactorioDlc, GameServerManager, Language,
+    ManagerConfig, PathsConfig, ServerConfig, ServerEvent, ServerStatus,
 };
-use std::collections::HashSet;
 use slint::ComponentHandle;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tracing_subscriber::EnvFilter;
 use translations::Strings;
-use valheim::ValheimServer;
 
 slint::include_modules!();
 
@@ -40,6 +40,7 @@ struct UiState {
     backup_sort_desc: bool,
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -58,7 +59,6 @@ fn main() -> anyhow::Result<()> {
 
     let ui = MainWindow::new()?;
     let backup_window = BackupWindow::new()?;
-    let world_window = WorldSettingsWindow::new()?;
 
     let initial_config = match AppConfig::load(&config_path) {
         Ok(cfg) => Some(cfg),
@@ -88,21 +88,22 @@ fn main() -> anyhow::Result<()> {
     // is already in the user's language.
     apply_strings(&ui, translations::for_language(initial_language));
     apply_backup_window_strings(&backup_window, translations::for_language(initial_language));
-    apply_world_window_strings(&world_window, translations::for_language(initial_language));
-    apply_world_window_models(&world_window, translations::for_language(initial_language));
     ui.set_language_index(translations::language_index(initial_language));
 
     populate_settings_fields(
         &ui,
-        initial_config.as_ref().unwrap_or(&default_config_for_setup()),
+        initial_config
+            .as_ref()
+            .unwrap_or(&default_config_for_setup()),
     );
 
-    let server: Option<Arc<ValheimServer>> = match initial_config.as_ref() {
+    let server: Option<Arc<FactorioServer>> = match initial_config.as_ref() {
         Some(cfg) => {
             let t = translations::for_language(initial_language);
             ui.set_status_text(t.status_stopped.into());
             ui.set_paths_summary(translations::render_paths_summary(cfg, t).into());
             ui.set_params_summary(translations::render_params_summary(cfg, t).into());
+            update_install_state(&ui, cfg, t);
             ui.set_server_controls_enabled(true);
             ui.set_public_address(cfg.manager.public_address.clone().into());
             // Populate BackupWindow's context strip (world / paths display).
@@ -110,7 +111,10 @@ fn main() -> anyhow::Result<()> {
             backup_window.set_save_dir_display(cfg.paths.save_dir.display().to_string().into());
             backup_window.set_backup_dir_display(cfg.paths.backup_dir.display().to_string().into());
             backup_window.set_server_controls_enabled(true);
-            Some(Arc::new(ValheimServer::new(cfg.clone(), manager_dir.clone())))
+            Some(Arc::new(FactorioServer::new(
+                cfg.clone(),
+                manager_dir.clone(),
+            )))
         }
         None => {
             let t = translations::for_language(initial_language);
@@ -131,12 +135,7 @@ fn main() -> anyhow::Result<()> {
     if let Some(server) = server.as_ref().cloned() {
         wire_server_callbacks(&ui, server.clone());
         spawn_event_forwarder(&ui, server.clone(), state.clone());
-        wire_backup_callbacks(
-            &ui,
-            &backup_window,
-            server.clone(),
-            state.clone(),
-        );
+        wire_backup_callbacks(&ui, &backup_window, server.clone(), state.clone());
 
         // Initial backup list population.
         {
@@ -149,7 +148,7 @@ fn main() -> anyhow::Result<()> {
             });
         }
 
-        // Adopt any Valheim server left running by a previous GUI session.
+        // Adopt any Factorio server left running by a previous GUI session.
         // Done in a background task so the window appears immediately; the
         // event forwarder picks up the Running status flip when it resolves.
         let server_for_reattach = server.clone();
@@ -170,13 +169,11 @@ fn main() -> anyhow::Result<()> {
     wire_language_callback(
         &ui,
         &backup_window,
-        &world_window,
         server.clone(),
         state.clone(),
         manager_dir.clone(),
     );
     wire_connection_callbacks(&ui, state.clone(), manager_dir.clone());
-    wire_world_callbacks(&ui, &world_window);
 
     ui.run()?;
     Ok(())
@@ -191,17 +188,90 @@ fn current_manager_dir() -> anyhow::Result<PathBuf> {
 }
 
 fn default_config_for_setup() -> AppConfig {
+    let root = default_factorio_root();
     AppConfig {
         paths: PathsConfig {
-            steamcmd: PathBuf::from("D:\\Valheim\\SteamCMD\\steamcmd.exe"),
-            server_dir: PathBuf::from("D:\\Valheim\\Server"),
-            save_dir: PathBuf::from("D:\\Valheim\\Data"),
-            backup_dir: PathBuf::from("D:\\Valheim\\Backups"),
-            log_file: PathBuf::from("D:\\Valheim\\Server\\logs\\server.log"),
+            steamcmd: root.join("SteamCMD").join("steamcmd.exe"),
+            server_dir: root.join("Server"),
+            save_dir: root.join("Saves"),
+            backup_dir: default_backup_root().join("factorio"),
+            log_file: root.join("Server").join("logs").join("server.log"),
         },
         server: ServerConfig::default(),
-        manager: ManagerConfig::default(),
+        manager: ManagerConfig {
+            steam_username: detect_steam_account_name().unwrap_or_default(),
+            ..ManagerConfig::default()
+        },
     }
+}
+
+fn steam_account_name_for_display(cfg: &AppConfig) -> String {
+    let configured = cfg.manager.steam_username.trim();
+    if configured.is_empty() {
+        detect_steam_account_name().unwrap_or_default()
+    } else {
+        configured.to_string()
+    }
+}
+
+fn detect_steam_account_name() -> Option<String> {
+    steam_loginuser_paths().find_map(|path| {
+        let text = std::fs::read_to_string(path).ok()?;
+        parse_steam_loginusers_account(&text)
+    })
+}
+
+fn steam_loginuser_paths() -> impl Iterator<Item = PathBuf> {
+    ["ProgramFiles(x86)", "ProgramFiles"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .map(|root| root.join("Steam").join("config").join("loginusers.vdf"))
+        .filter(|path| path.is_file())
+}
+
+fn parse_steam_loginusers_account(text: &str) -> Option<String> {
+    let mut first_account = None;
+    let mut current_account = None;
+
+    for line in text.lines() {
+        if let Some(account) = steam_vdf_value(line, "AccountName") {
+            first_account.get_or_insert_with(|| account.clone());
+            current_account = Some(account);
+        } else if steam_vdf_value(line, "MostRecent").as_deref() == Some("1") {
+            if let Some(account) = current_account {
+                return Some(account);
+            }
+        } else if line.trim() == "}" {
+            current_account = None;
+        }
+    }
+
+    first_account
+}
+
+fn steam_vdf_value(line: &str, key: &str) -> Option<String> {
+    let mut quoted = line.split('"');
+    let _ = quoted.next()?;
+    let found_key = quoted.next()?;
+    let _ = quoted.next()?;
+    let value = quoted.next()?;
+    (found_key == key).then(|| value.to_string())
+}
+
+fn default_factorio_root() -> PathBuf {
+    home_dir().join(".factorio-server-maintainer")
+}
+
+fn default_backup_root() -> PathBuf {
+    home_dir().join(".game-server-backups")
+}
+
+fn home_dir() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("C:\\"))
 }
 
 fn apply_strings(ui: &MainWindow, t: &Strings) {
@@ -214,6 +284,9 @@ fn apply_strings(ui: &MainWindow, t: &Strings) {
     ui.set_t_group_status(t.group_status.into());
     ui.set_t_group_operation(t.group_operation.into());
     ui.set_t_group_log(t.group_log.into());
+    ui.set_t_progress_steamcmd(t.progress_steamcmd.into());
+    ui.set_t_progress_factorio(t.progress_factorio.into());
+    ui.set_t_progress_server(t.progress_server.into());
 
     ui.set_t_lbl_language(t.lbl_language.into());
 
@@ -224,6 +297,7 @@ fn apply_strings(ui: &MainWindow, t: &Strings) {
     ui.set_t_btn_save(t.btn_save.into());
 
     ui.set_t_lbl_steamcmd(t.lbl_steamcmd.into());
+    ui.set_t_lbl_steam_user(t.lbl_steam_user.into());
     ui.set_t_lbl_server_dir(t.lbl_server_dir.into());
     ui.set_t_lbl_save_dir(t.lbl_save_dir.into());
     ui.set_t_lbl_backup_dir(t.lbl_backup_dir.into());
@@ -237,14 +311,10 @@ fn apply_strings(ui: &MainWindow, t: &Strings) {
     ui.set_t_lbl_public(t.lbl_public.into());
     ui.set_t_lbl_save_interval(t.lbl_save_interval.into());
     ui.set_t_lbl_backups(t.lbl_backups.into());
-
-    ui.set_t_btn_open_world(t.btn_open_world.into());
+    ui.set_t_lbl_dlc(t.lbl_dlc.into());
 
     ui.set_t_lbl_graceful_stop(t.lbl_graceful_stop.into());
     ui.set_t_chk_auto_backup(t.chk_auto_backup.into());
-    ui.set_t_lbl_backup_short(t.lbl_backup_short.into());
-    ui.set_t_lbl_backup_long(t.lbl_backup_long.into());
-    ui.set_t_backup_intervals_hint(t.backup_intervals_hint.into());
 
     ui.set_t_group_players(t.group_players.into());
     ui.set_t_group_backup(t.group_backup.into());
@@ -257,6 +327,7 @@ fn apply_strings(ui: &MainWindow, t: &Strings) {
     ui.set_t_lbl_public_address(t.lbl_public_address.into());
     ui.set_t_public_address_hint(t.public_address_hint.into());
     ui.set_t_btn_copy(t.btn_copy.into());
+    ui.set_t_btn_tailscale(t.btn_tailscale.into());
 }
 
 /// Push every translatable label on the BackupWindow.
@@ -283,65 +354,13 @@ fn apply_backup_window_strings(bw: &BackupWindow, t: &Strings) {
     bw.set_t_lbl_backup_dir(t.lbl_backup_dir.into());
 }
 
-/// Push every translatable label on the WorldSettingsWindow.
-fn apply_world_window_strings(ww: &WorldSettingsWindow, t: &Strings) {
-    ww.set_t_window_title(t.world_window_title.into());
-    ww.set_t_btn_done(t.world_done.into());
-    ww.set_t_btn_cancel(t.world_cancel.into());
-    ww.set_t_lbl_preset(t.lbl_preset.into());
-    ww.set_t_lbl_combat(t.lbl_combat.into());
-    ww.set_t_lbl_deathpenalty(t.lbl_deathpenalty.into());
-    ww.set_t_lbl_resources(t.lbl_resources.into());
-    ww.set_t_lbl_raids(t.lbl_raids.into());
-    ww.set_t_lbl_portals(t.lbl_portals.into());
-    ww.set_t_preset_description(t.preset_description.into());
-    ww.set_t_combat_description(t.combat_description.into());
-    ww.set_t_deathpenalty_description(t.deathpenalty_description.into());
-    ww.set_t_resources_description(t.resources_description.into());
-    ww.set_t_raids_description(t.raids_description.into());
-    ww.set_t_portals_description(t.portals_description.into());
-    ww.set_t_lbl_keys(t.lbl_keys.into());
-    ww.set_t_keys_description(t.keys_description.into());
-    ww.set_t_key_nobuildcost(t.key_nobuildcost.into());
-    ww.set_t_key_nobuildcost_desc(t.key_nobuildcost_desc.into());
-    ww.set_t_key_passivemobs(t.key_passivemobs.into());
-    ww.set_t_key_passivemobs_desc(t.key_passivemobs_desc.into());
-    ww.set_t_key_nomap(t.key_nomap.into());
-    ww.set_t_key_nomap_desc(t.key_nomap_desc.into());
-    ww.set_t_key_noportals(t.key_noportals.into());
-    ww.set_t_key_noportals_desc(t.key_noportals_desc.into());
-    ww.set_t_key_playerevents(t.key_playerevents.into());
-    ww.set_t_key_playerevents_desc(t.key_playerevents_desc.into());
-    ww.set_t_key_showenemyhud(t.key_showenemyhud.into());
-    ww.set_t_key_showenemyhud_desc(t.key_showenemyhud_desc.into());
-    ww.set_t_key_devcommands(t.key_devcommands.into());
-    ww.set_t_key_devcommands_desc(t.key_devcommands_desc.into());
-}
-
-/// Push the localised ComboBox option lists on the WorldSettingsWindow.
-/// Slint preserves `current-index` across model swaps when lengths match,
-/// so language switching keeps the user's choice intact.
-fn apply_world_window_models(ww: &WorldSettingsWindow, t: &Strings) {
-    ww.set_preset_options(strings_to_model(t.preset_labels));
-    ww.set_combat_options(strings_to_model(t.combat_labels));
-    ww.set_deathpenalty_options(strings_to_model(t.deathpenalty_labels));
-    ww.set_resources_options(strings_to_model(t.resources_labels));
-    ww.set_raids_options(strings_to_model(t.raids_labels));
-    ww.set_portals_options(strings_to_model(t.portals_labels));
-}
-
-fn strings_to_model(labels: &[&'static str]) -> slint::ModelRc<slint::SharedString> {
-    let v: Vec<slint::SharedString> = labels.iter().map(|s| slint::SharedString::from(*s)).collect();
-    let model = std::rc::Rc::new(slint::VecModel::from(v));
-    slint::ModelRc::from(model)
-}
-
 fn populate_settings_fields(ui: &MainWindow, cfg: &AppConfig) {
     ui.set_steamcmd_path(cfg.paths.steamcmd.display().to_string().into());
     ui.set_server_dir(cfg.paths.server_dir.display().to_string().into());
     ui.set_save_dir(cfg.paths.save_dir.display().to_string().into());
     ui.set_backup_dir(cfg.paths.backup_dir.display().to_string().into());
     ui.set_log_file(cfg.paths.log_file.display().to_string().into());
+    ui.set_steam_username(steam_account_name_for_display(cfg).into());
 
     ui.set_server_name(cfg.server.name.clone().into());
     ui.set_world_name(cfg.server.world.clone().into());
@@ -350,48 +369,10 @@ fn populate_settings_fields(ui: &MainWindow, cfg: &AppConfig) {
     ui.set_server_public(cfg.server.public.to_string().into());
     ui.set_save_interval(cfg.server.save_interval.to_string().into());
     ui.set_backup_count(cfg.server.backups.to_string().into());
+    ui.set_dlc_index(dlc_index(cfg.server.dlc));
 
-    ui.set_preset_index(translations::index_of_value(
-        &cfg.server.preset,
-        translations::PRESET_VALUES,
-    ));
-    ui.set_mod_combat_index(translations::index_of_value(
-        &cfg.server.mod_combat,
-        translations::COMBAT_VALUES,
-    ));
-    ui.set_mod_deathpenalty_index(translations::index_of_value(
-        &cfg.server.mod_deathpenalty,
-        translations::DEATHPENALTY_VALUES,
-    ));
-    ui.set_mod_resources_index(translations::index_of_value(
-        &cfg.server.mod_resources,
-        translations::RESOURCES_VALUES,
-    ));
-    ui.set_mod_raids_index(translations::index_of_value(
-        &cfg.server.mod_raids,
-        translations::RAIDS_VALUES,
-    ));
-    ui.set_mod_portals_index(translations::index_of_value(
-        &cfg.server.mod_portals,
-        translations::PORTALS_VALUES,
-    ));
-
-    let keys = &cfg.server.world_keys;
-    let has = |k: &str| keys.iter().any(|s| s == k);
-    ui.set_key_nobuildcost(has("nobuildcost"));
-    ui.set_key_passivemobs(has("passivemobs"));
-    ui.set_key_nomap(has("nomap"));
-    ui.set_key_noportals(has("noportals"));
-    ui.set_key_playerevents(has("playerevents"));
-    ui.set_key_showenemyhud(has("showenemyhud"));
-    ui.set_key_devcommands(has("devcommands"));
-
-    ui.set_graceful_stop_timeout_secs(
-        cfg.manager.graceful_stop_timeout_secs.to_string().into(),
-    );
+    ui.set_graceful_stop_timeout_secs(cfg.manager.graceful_stop_timeout_secs.to_string().into());
     ui.set_auto_backup_before_update(cfg.manager.auto_backup_before_update);
-    ui.set_backup_short_secs(cfg.manager.backup_short_secs.to_string().into());
-    ui.set_backup_long_secs(cfg.manager.backup_long_secs.to_string().into());
 
     ui.set_error_text("".into());
 }
@@ -421,47 +402,7 @@ fn build_config_from_ui(ui: &MainWindow, language: Language) -> Result<AppConfig
             save_interval: parse_u::<u32>(&ui.get_save_interval(), "save_interval")?,
             backups: parse_u::<u32>(&ui.get_backup_count(), "backup_count")?,
             crossplay: false,
-            mod_combat: translations::value_at_index(
-                ui.get_mod_combat_index(),
-                translations::COMBAT_VALUES,
-            )
-            .to_string(),
-            mod_deathpenalty: translations::value_at_index(
-                ui.get_mod_deathpenalty_index(),
-                translations::DEATHPENALTY_VALUES,
-            )
-            .to_string(),
-            mod_resources: translations::value_at_index(
-                ui.get_mod_resources_index(),
-                translations::RESOURCES_VALUES,
-            )
-            .to_string(),
-            mod_raids: translations::value_at_index(
-                ui.get_mod_raids_index(),
-                translations::RAIDS_VALUES,
-            )
-            .to_string(),
-            mod_portals: translations::value_at_index(
-                ui.get_mod_portals_index(),
-                translations::PORTALS_VALUES,
-            )
-            .to_string(),
-            preset: translations::value_at_index(
-                ui.get_preset_index(),
-                translations::PRESET_VALUES,
-            )
-            .to_string(),
-            world_keys: {
-                let mut v: Vec<String> = Vec::new();
-                if ui.get_key_nobuildcost() { v.push("nobuildcost".into()); }
-                if ui.get_key_passivemobs() { v.push("passivemobs".into()); }
-                if ui.get_key_nomap() { v.push("nomap".into()); }
-                if ui.get_key_noportals() { v.push("noportals".into()); }
-                if ui.get_key_playerevents() { v.push("playerevents".into()); }
-                if ui.get_key_showenemyhud() { v.push("showenemyhud".into()); }
-                if ui.get_key_devcommands() { v.push("devcommands".into()); }
-                v
-            },
+            dlc: dlc_from_index(ui.get_dlc_index()),
         },
         manager: ManagerConfig {
             graceful_stop_timeout_secs: parse_u::<u32>(
@@ -471,16 +412,23 @@ fn build_config_from_ui(ui: &MainWindow, language: Language) -> Result<AppConfig
             auto_backup_before_update: ui.get_auto_backup_before_update(),
             language,
             public_address: ui.get_public_address().to_string(),
-            backup_short_secs: parse_u::<u32>(
-                &ui.get_backup_short_secs(),
-                "backup_short_secs",
-            )?,
-            backup_long_secs: parse_u::<u32>(
-                &ui.get_backup_long_secs(),
-                "backup_long_secs",
-            )?,
+            steam_username: ui.get_steam_username().trim().to_string(),
         },
     })
+}
+
+fn dlc_index(dlc: FactorioDlc) -> i32 {
+    match dlc {
+        FactorioDlc::Base => 0,
+        FactorioDlc::SpaceAge => 1,
+    }
+}
+
+fn dlc_from_index(idx: i32) -> FactorioDlc {
+    match idx {
+        1 => FactorioDlc::SpaceAge,
+        _ => FactorioDlc::Base,
+    }
 }
 
 fn ensure_directories(cfg: &AppConfig) -> anyhow::Result<()> {
@@ -491,13 +439,24 @@ fn ensure_directories(cfg: &AppConfig) -> anyhow::Result<()> {
     std::fs::create_dir_all(&cfg.paths.backup_dir)
         .with_context(|| format!("create {}", cfg.paths.backup_dir.display()))?;
     if let Some(parent) = cfg.paths.log_file.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     Ok(())
 }
 
-fn wire_server_callbacks(ui: &MainWindow, server: Arc<ValheimServer>) {
+fn update_install_state(ui: &MainWindow, cfg: &AppConfig, t: &Strings) {
+    let steamcmd_ready = cfg.paths.steamcmd.is_file();
+    let factorio_ready = cfg.paths.server_dir.join(factorio::SERVER_EXE).is_file();
+    ui.set_steamcmd_ready(steamcmd_ready);
+    ui.set_factorio_ready(factorio_ready);
+    ui.set_install_status_text(if factorio_ready {
+        t.install_ready.into()
+    } else {
+        t.install_missing.into()
+    });
+}
+
+fn wire_server_callbacks(ui: &MainWindow, server: Arc<FactorioServer>) {
     let weak = ui.as_weak();
     {
         let server = server.clone();
@@ -532,19 +491,27 @@ fn wire_server_callbacks(ui: &MainWindow, server: Arc<ValheimServer>) {
             let server = server.clone();
             let weak = weak.clone();
             tokio::spawn(async move {
-                if let Err(e) = server.install_or_update().await {
-                    set_status_text(&weak, format!("update failed: {e:#}"));
+                match server.install_or_update().await {
+                    Ok(()) => {
+                        let cfg = server.config().clone();
+                        let _ = weak.upgrade_in_event_loop(move |ui| {
+                            let t = translations::for_language(translations::language_from_index(
+                                ui.get_language_index(),
+                            ));
+                            update_install_state(&ui, &cfg, t);
+                        });
+                    }
+                    Err(e) => {
+                        set_status_text(&weak, format!("update failed: {e:#}"));
+                    }
                 }
             });
         });
     }
 }
 
-fn spawn_event_forwarder(
-    ui: &MainWindow,
-    server: Arc<ValheimServer>,
-    state: Arc<Mutex<UiState>>,
-) {
+#[allow(clippy::too_many_lines)]
+fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Arc<Mutex<UiState>>) {
     let weak = ui.as_weak();
     let mut rx = server.subscribe();
     tokio::spawn(async move {
@@ -564,9 +531,7 @@ fn spawn_event_forwarder(
                         let mut roster_changed = false;
                         match &ev {
                             ServerEvent::PlayerJoined { steam_id } => {
-                                guard
-                                    .players
-                                    .insert(*steam_id, chrono::Local::now());
+                                guard.players.insert(*steam_id, chrono::Local::now());
                                 roster_changed = true;
                             }
                             ServerEvent::PlayerLeft { steam_id } => {
@@ -641,7 +606,7 @@ fn build_player_data(
 ) -> (Vec<PlayerRow>, String) {
     let mut entries: Vec<(u64, chrono::DateTime<chrono::Local>)> =
         players.iter().map(|(k, v)| (*k, *v)).collect();
-    entries.sort_by(|a, b| a.1.cmp(&b.1));
+    entries.sort_by_key(|entry| entry.1);
     let rows: Vec<PlayerRow> = entries
         .into_iter()
         .map(|(steam_id, at)| PlayerRow {
@@ -708,10 +673,11 @@ fn subtab_to_kind(subtab: i32) -> BackupKind {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn wire_backup_callbacks(
     ui: &MainWindow,
     backup_window: &BackupWindow,
-    server: Arc<ValheimServer>,
+    server: Arc<FactorioServer>,
     state: Arc<Mutex<UiState>>,
 ) {
     let main_weak = ui.as_weak();
@@ -858,10 +824,8 @@ fn wire_backup_callbacks(
                 let desc = guard.backup_sort_desc;
                 sort_backups_inplace(&mut guard.last_backups, col, desc);
                 let selected = guard.selected_backup_ids.clone();
-                let manual =
-                    backups_to_rows(&guard.last_backups, BackupKind::Manual, &selected);
-                let pre =
-                    backups_to_rows(&guard.last_backups, BackupKind::PreRollback, &selected);
+                let manual = backups_to_rows(&guard.last_backups, BackupKind::Manual, &selected);
+                let pre = backups_to_rows(&guard.last_backups, BackupKind::PreRollback, &selected);
                 (manual, pre, col, desc)
             };
             install_backup_models(&bw, manual_rows, pre_rollback_rows);
@@ -947,148 +911,149 @@ fn count_selected_for(state: &UiState, kind: BackupKind) -> usize {
         .count()
 }
 
-fn install_backup_models(
-    bw: &BackupWindow,
-    manual: Vec<BackupRow>,
-    pre_rollback: Vec<BackupRow>,
-) {
+fn install_backup_models(bw: &BackupWindow, manual: Vec<BackupRow>, pre_rollback: Vec<BackupRow>) {
     let manual_model = std::rc::Rc::new(slint::VecModel::from(manual));
     let pre_rollback_model = std::rc::Rc::new(slint::VecModel::from(pre_rollback));
     bw.set_snapshots_manual(slint::ModelRc::from(manual_model));
     bw.set_snapshots_pre_rollback(slint::ModelRc::from(pre_rollback_model));
 }
 
-fn wire_world_callbacks(ui: &MainWindow, world_window: &WorldSettingsWindow) {
-    let main_weak = ui.as_weak();
-    let world_weak = world_window.as_weak();
+fn wire_connection_callbacks(ui: &MainWindow, state: Arc<Mutex<UiState>>, manager_dir: PathBuf) {
+    wire_public_address_save(ui, state.clone(), manager_dir.clone());
+    wire_tailscale_address(ui, state.clone(), manager_dir);
+    wire_public_address_copy(ui, state);
+}
 
-    // Main: open world settings — copy live indices into the dialog and show.
-    {
-        let main_weak = main_weak.clone();
-        let world_weak = world_weak.clone();
-        ui.on_open_world_clicked(move || {
-            let Some(main) = main_weak.upgrade() else { return };
-            let Some(world) = world_weak.upgrade() else { return };
-            world.set_preset_index(main.get_preset_index());
-            world.set_mod_combat_index(main.get_mod_combat_index());
-            world.set_mod_deathpenalty_index(main.get_mod_deathpenalty_index());
-            world.set_mod_resources_index(main.get_mod_resources_index());
-            world.set_mod_raids_index(main.get_mod_raids_index());
-            world.set_mod_portals_index(main.get_mod_portals_index());
-            world.set_key_nobuildcost(main.get_key_nobuildcost());
-            world.set_key_passivemobs(main.get_key_passivemobs());
-            world.set_key_nomap(main.get_key_nomap());
-            world.set_key_noportals(main.get_key_noportals());
-            world.set_key_playerevents(main.get_key_playerevents());
-            world.set_key_showenemyhud(main.get_key_showenemyhud());
-            world.set_key_devcommands(main.get_key_devcommands());
-            let _ = world.show();
-        });
-    }
+fn wire_public_address_save(ui: &MainWindow, state: Arc<Mutex<UiState>>, manager_dir: PathBuf) {
+    let ui_weak = ui.as_weak();
+    ui.on_public_address_accepted(move |value| {
+        let Some(ui) = ui_weak.upgrade() else { return };
+        let trimmed = value.trim().to_string();
+        let language = current_language_after_address_save(&state, &manager_dir, &trimmed);
+        let t = translations::for_language(language);
+        ui.set_public_address(trimmed.into());
+        set_public_address_status_briefly(&ui, t.save_success);
+    });
+}
 
-    // World: Apply — copy dialog indices back to main, hide.
-    {
-        let main_weak = main_weak.clone();
-        let world_weak = world_weak.clone();
-        world_window.on_apply_clicked(move || {
-            let Some(main) = main_weak.upgrade() else { return };
-            let Some(world) = world_weak.upgrade() else { return };
-            main.set_preset_index(world.get_preset_index());
-            main.set_mod_combat_index(world.get_mod_combat_index());
-            main.set_mod_deathpenalty_index(world.get_mod_deathpenalty_index());
-            main.set_mod_resources_index(world.get_mod_resources_index());
-            main.set_mod_raids_index(world.get_mod_raids_index());
-            main.set_mod_portals_index(world.get_mod_portals_index());
-            main.set_key_nobuildcost(world.get_key_nobuildcost());
-            main.set_key_passivemobs(world.get_key_passivemobs());
-            main.set_key_nomap(world.get_key_nomap());
-            main.set_key_noportals(world.get_key_noportals());
-            main.set_key_playerevents(world.get_key_playerevents());
-            main.set_key_showenemyhud(world.get_key_showenemyhud());
-            main.set_key_devcommands(world.get_key_devcommands());
-            let _ = world.hide();
-        });
-    }
+fn wire_tailscale_address(ui: &MainWindow, state: Arc<Mutex<UiState>>, manager_dir: PathBuf) {
+    let ui_weak = ui.as_weak();
+    ui.on_use_tailscale_address(move || {
+        let Some(ui) = ui_weak.upgrade() else { return };
+        let (language, port) = current_language_and_port(&state);
+        let t = translations::for_language(language);
+        let Some(ip) = detect_tailscale_ipv4() else {
+            set_public_address_status_briefly(&ui, "Tailscale IPv4 not found");
+            return;
+        };
+        let address = format!("{ip}:{port}");
+        persist_public_address(&state, &manager_dir, &address);
+        ui.set_public_address(address.into());
+        set_public_address_status_briefly(&ui, t.save_success);
+    });
+}
 
-    // World: Cancel — just hide (discard the in-flight indices).
-    {
-        let world_weak = world_weak.clone();
-        world_window.on_cancel_clicked(move || {
-            if let Some(world) = world_weak.upgrade() {
-                let _ = world.hide();
+fn wire_public_address_copy(ui: &MainWindow, state: Arc<Mutex<UiState>>) {
+    let ui_weak = ui.as_weak();
+    ui.on_copy_public_address(move || {
+        let Some(ui) = ui_weak.upgrade() else { return };
+        let value = ui.get_public_address().to_string();
+        let language = state.lock().expect("state mutex poisoned").language;
+        let t = translations::for_language(language);
+        let msg = match arboard::Clipboard::new().and_then(|mut c| c.set_text(value)) {
+            Ok(()) => t.copy_success.to_string(),
+            Err(e) => {
+                tracing::warn!(error = %e, "clipboard copy failed");
+                t.copy_failed.to_string()
             }
-        });
+        };
+        set_public_address_status_briefly(&ui, &msg);
+    });
+}
+
+fn current_language_after_address_save(
+    state: &Arc<Mutex<UiState>>,
+    manager_dir: &Path,
+    address: &str,
+) -> Language {
+    persist_public_address(state, manager_dir, address);
+    state.lock().expect("state mutex poisoned").language
+}
+
+fn current_language_and_port(state: &Arc<Mutex<UiState>>) -> (Language, u16) {
+    let guard = state.lock().expect("state mutex poisoned");
+    let port = guard
+        .config
+        .as_ref()
+        .map(|cfg| cfg.server.port)
+        .unwrap_or(34197);
+    (guard.language, port)
+}
+
+fn set_public_address_status_briefly(ui: &MainWindow, msg: &str) {
+    ui.set_public_address_status(msg.into());
+    let weak = ui.as_weak();
+    slint::Timer::single_shot(std::time::Duration::from_secs(3), move || {
+        if let Some(ui) = weak.upgrade() {
+            ui.set_public_address_status("".into());
+        }
+    });
+}
+
+fn persist_public_address(state: &Arc<Mutex<UiState>>, manager_dir: &Path, address: &str) {
+    let mut guard = state.lock().expect("state mutex poisoned");
+    if let Some(cfg) = guard.config.as_mut() {
+        cfg.manager.public_address = address.to_string();
+        let path = manager_dir.join("config.toml");
+        if let Err(e) = cfg.save(&path) {
+            tracing::warn!(error = %e, "failed to persist public address");
+        }
     }
 }
 
-fn wire_connection_callbacks(
-    ui: &MainWindow,
-    state: Arc<Mutex<UiState>>,
-    manager_dir: PathBuf,
-) {
-    // Enter in the LineEdit persists the address to config.toml. No restart
-    // needed because the public address is informational only — neither
-    // Valheim nor the ValheimServer instance read it.
-    {
-        let state = state.clone();
-        let manager_dir = manager_dir.clone();
-        let ui_weak = ui.as_weak();
-        ui.on_public_address_accepted(move |value| {
-            let Some(ui) = ui_weak.upgrade() else { return };
-            let trimmed = value.trim().to_string();
-            let language = {
-                let mut guard = state.lock().expect("state mutex poisoned");
-                if let Some(cfg) = guard.config.as_mut() {
-                    cfg.manager.public_address = trimmed.clone();
-                    let path = manager_dir.join("config.toml");
-                    if let Err(e) = cfg.save(&path) {
-                        tracing::warn!(error = %e, "failed to persist public address");
-                    }
-                }
-                guard.language
-            };
-            let t = translations::for_language(language);
-            ui.set_public_address(trimmed.into());
-            ui.set_public_address_status(t.save_success.into());
-            // Clear the status banner after a moment so it doesn't linger.
-            let weak = ui.as_weak();
-            slint::Timer::single_shot(std::time::Duration::from_secs(3), move || {
-                if let Some(ui) = weak.upgrade() {
-                    ui.set_public_address_status("".into());
-                }
-            });
-        });
-    }
+fn detect_tailscale_ipv4() -> Option<String> {
+    detect_tailscale_ipv4_from_cli().or_else(detect_tailscale_ipv4_from_adapter)
+}
 
-    // Copy current value to the system clipboard via arboard.
-    {
-        let state = state.clone();
-        let ui_weak = ui.as_weak();
-        ui.on_copy_public_address(move || {
-            let Some(ui) = ui_weak.upgrade() else { return };
-            let value = ui.get_public_address().to_string();
-            let language = state.lock().expect("state mutex poisoned").language;
-            let t = translations::for_language(language);
-            let msg = match arboard::Clipboard::new().and_then(|mut c| c.set_text(value)) {
-                Ok(()) => t.copy_success.to_string(),
-                Err(e) => {
-                    tracing::warn!(error = %e, "clipboard copy failed");
-                    t.copy_failed.to_string()
-                }
-            };
-            ui.set_public_address_status(msg.into());
-            let weak = ui.as_weak();
-            slint::Timer::single_shot(std::time::Duration::from_secs(3), move || {
-                if let Some(ui) = weak.upgrade() {
-                    ui.set_public_address_status("".into());
-                }
-            });
-        });
+fn detect_tailscale_ipv4_from_cli() -> Option<String> {
+    let output = std::process::Command::new("tailscale")
+        .args(["ip", "-4"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
     }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| is_tailscale_ipv4(line))
+        .map(str::to_string)
+}
+
+fn detect_tailscale_ipv4_from_adapter() -> Option<String> {
+    let script = "Get-NetIPAddress -AddressFamily IPv4 | \
+                  Where-Object { $_.InterfaceAlias -like '*Tailscale*' } | \
+                  Select-Object -First 1 -ExpandProperty IPAddress";
+    let output = std::process::Command::new("powershell")
+        .args(["-NoLogo", "-NoProfile", "-Command", script])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| is_tailscale_ipv4(line))
+        .map(str::to_string)
+}
+
+fn is_tailscale_ipv4(value: &str) -> bool {
+    value.starts_with("100.") && value.parse::<std::net::Ipv4Addr>().is_ok()
 }
 
 async fn refresh_backups_async(
-    server: &Arc<ValheimServer>,
+    server: &Arc<FactorioServer>,
     state: &Arc<Mutex<UiState>>,
     main_weak: &slint::Weak<MainWindow>,
     backup_weak: &slint::Weak<BackupWindow>,
@@ -1104,7 +1069,11 @@ async fn refresh_backups_async(
     let (manual_rows, pre_rollback_rows, manual_count, pre_count, count_text, total) = {
         let mut guard = state.lock().expect("state mutex poisoned");
         // Apply current sort order.
-        sort_backups_inplace(&mut backups, guard.backup_sort_column, guard.backup_sort_desc);
+        sort_backups_inplace(
+            &mut backups,
+            guard.backup_sort_column,
+            guard.backup_sort_desc,
+        );
 
         // Drop selections that no longer correspond to live snapshots.
         let live: HashSet<String> = backups.iter().map(|b| b.id.0.clone()).collect();
@@ -1126,7 +1095,14 @@ async fn refresh_backups_async(
         } else {
             translations::fmt_count(t.backups_count_fmt, backups.len())
         };
-        (manual, pre, manual_count, pre_count, count_text, backups.len())
+        (
+            manual,
+            pre,
+            manual_count,
+            pre_count,
+            count_text,
+            backups.len(),
+        )
     };
     let _ = total;
 
@@ -1161,9 +1137,10 @@ fn flags_for_status(s: ServerStatus) -> (bool, bool) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn wire_browse_and_save(
     ui: &MainWindow,
-    server: Option<Arc<ValheimServer>>,
+    server: Option<Arc<FactorioServer>>,
     state: Arc<Mutex<UiState>>,
     manager_dir: PathBuf,
 ) {
@@ -1211,14 +1188,23 @@ fn wire_browse_and_save(
             if let Some(s) = server.as_ref() {
                 let st = s.status();
                 if !matches!(st, ServerStatus::Stopped | ServerStatus::Crashed) {
-                    ui.set_error_text(
-                        format!("Cannot save while server is {st:?}. Stop it first.").into(),
-                    );
+                    let language = state.lock().expect("state mutex poisoned").language;
+                    let msg = match language {
+                        Language::Ja => {
+                            "サーバー実行中は保存できません。先にサーバーを停止してください。"
+                        }
+                        Language::En => "Cannot save while the server is running. Stop it first.",
+                    };
+                    tracing::info!(status = ?st, "save blocked while server is active");
+                    ui.set_error_text(msg.into());
                     return;
                 }
             }
 
-            let language = state.lock().expect("state mutex poisoned").language;
+            let language = {
+                let guard = state.lock().expect("state mutex poisoned");
+                guard.language
+            };
             let cfg = match build_config_from_ui(&ui, language) {
                 Ok(c) => c,
                 Err(e) => {
@@ -1255,14 +1241,12 @@ fn wire_browse_and_save(
 fn wire_language_callback(
     ui: &MainWindow,
     backup_window: &BackupWindow,
-    world_window: &WorldSettingsWindow,
-    server: Option<Arc<ValheimServer>>,
+    server: Option<Arc<FactorioServer>>,
     state: Arc<Mutex<UiState>>,
     manager_dir: PathBuf,
 ) {
     let ui_weak = ui.as_weak();
     let bw_weak = backup_window.as_weak();
-    let ww_weak = world_window.as_weak();
     ui.on_language_changed(move |idx| {
         let Some(ui) = ui_weak.upgrade() else {
             return;
@@ -1273,10 +1257,6 @@ fn wire_language_callback(
         apply_strings(&ui, t);
         if let Some(bw) = bw_weak.upgrade() {
             apply_backup_window_strings(&bw, t);
-        }
-        if let Some(ww) = ww_weak.upgrade() {
-            apply_world_window_strings(&ww, t);
-            apply_world_window_models(&ww, t);
         }
         ui.set_language_index(translations::language_index(lang));
 
@@ -1290,6 +1270,7 @@ fn wire_language_callback(
             Some(cfg) => {
                 ui.set_paths_summary(translations::render_paths_summary(cfg, t).into());
                 ui.set_params_summary(translations::render_params_summary(cfg, t).into());
+                update_install_state(&ui, cfg, t);
                 let status_label = if let Some(s) = server.as_ref() {
                     translations::status_label(s.status(), t)
                 } else {
@@ -1325,8 +1306,7 @@ fn wire_language_callback(
             let main_weak = ui.as_weak();
             let backup_weak = bw_weak.clone();
             tokio::spawn(async move {
-                refresh_backups_async(&server, &state_for_refresh, &main_weak, &backup_weak)
-                    .await;
+                refresh_backups_async(&server, &state_for_refresh, &main_weak, &backup_weak).await;
             });
         }
 
@@ -1403,5 +1383,59 @@ fn log_line_from(ev: &ServerEvent, t: &Strings) -> Option<String> {
         ServerEvent::StatusChanged(s) => {
             Some(format!("[status] {}", translations::status_label(*s, t)))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_most_recent_steam_account() {
+        let text = r#"
+"users"
+{
+    "111"
+    {
+        "AccountName" "old_user"
+        "MostRecent" "0"
+    }
+    "222"
+    {
+        "AccountName" "recent_user"
+        "MostRecent" "1"
+    }
+}
+"#;
+
+        assert_eq!(
+            parse_steam_loginusers_account(text).as_deref(),
+            Some("recent_user")
+        );
+    }
+
+    #[test]
+    fn parses_first_steam_account_without_most_recent() {
+        let text = r#"
+"users"
+{
+    "111"
+    {
+        "AccountName" "first_user"
+    }
+}
+"#;
+
+        assert_eq!(
+            parse_steam_loginusers_account(text).as_deref(),
+            Some("first_user")
+        );
+    }
+
+    #[test]
+    fn recognizes_tailscale_ipv4() {
+        assert!(is_tailscale_ipv4("100.64.0.1"));
+        assert!(!is_tailscale_ipv4("192.168.1.10"));
+        assert!(!is_tailscale_ipv4("100.not.an.ip"));
     }
 }

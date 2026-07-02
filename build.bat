@@ -29,7 +29,7 @@ if %EXITCODE% NEQ 0 (
 
 echo.
 echo Built:
-echo   %~dp0target\release\valheim-server-manager.exe
+echo   %~dp0target\release\factorio-server-manager.exe
 echo   %~dp0target\release\ctrlc-helper.exe
 echo Log:   %~dp0%LOGFILE%
 endlocal

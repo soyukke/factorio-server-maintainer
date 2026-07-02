@@ -69,7 +69,7 @@ mod imp {
 
             let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
 
-            // CREATE_BREAKAWAY_FROM_JOB so the Valheim child outlives the
+            // CREATE_BREAKAWAY_FROM_JOB so the game server child outlives the
             // GUI process even when the GUI itself is in a Windows Job
             // Object (e.g. launched from VS Code's integrated terminal). On
             // Win 8+ this flag is a no-op when the parent is not in a job,
@@ -106,7 +106,7 @@ mod imp {
         }
 
         /// Open an existing process by PID. Used by re-attach after the GUI
-        /// is relaunched while the Valheim server is still running.
+        /// is relaunched while the game server is still running.
         pub fn open_existing(pid: u32) -> anyhow::Result<Self> {
             // PROCESS_TERMINATE for fallback TerminateProcess; SYNCHRONIZE
             // for WaitForSingleObject; PROCESS_QUERY_LIMITED_INFORMATION
@@ -114,8 +114,7 @@ mod imp {
             const PROCESS_TERMINATE: u32 = 0x0001;
             const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
             const SYNCHRONIZE: u32 = 0x0010_0000;
-            const ACCESS: u32 =
-                PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE;
+            const ACCESS: u32 = PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE;
 
             let h = unsafe { OpenProcess(ACCESS, 0, pid) };
             if h == 0 {
@@ -143,10 +142,7 @@ mod imp {
 
         /// Wait up to `timeout` for the process to exit. Returns the exit code
         /// when the process has exited, or `None` on timeout.
-        pub fn wait_for_exit_with_timeout(
-            &self,
-            timeout: Duration,
-        ) -> anyhow::Result<Option<u32>> {
+        pub fn wait_for_exit_with_timeout(&self, timeout: Duration) -> anyhow::Result<Option<u32>> {
             let ms = timeout.as_millis().min(u32::MAX as u128) as u32;
             let r = unsafe { WaitForSingleObject(self.process, ms) };
             if r == WAIT_OBJECT_0 {
@@ -195,7 +191,7 @@ mod imp {
 
     /// Build a Windows command line, quoting each argument per
     /// CommandLineToArgvW rules. The executable always gets quoted because
-    /// Valheim's install path commonly contains spaces.
+    /// Game server install paths commonly contain spaces.
     fn build_command_line(exe: &std::path::Path, args: &[String]) -> Vec<u16> {
         let mut s = String::new();
         s.push('"');
@@ -212,8 +208,8 @@ mod imp {
 
     fn push_quoted(out: &mut String, arg: &str) {
         // Per CommandLineToArgvW: backslashes followed by `"` must be doubled.
-        let needs_quoting = arg.is_empty()
-            || arg.chars().any(|c| c == ' ' || c == '\t' || c == '"');
+        let needs_quoting =
+            arg.is_empty() || arg.chars().any(|c| c == ' ' || c == '\t' || c == '"');
         if !needs_quoting {
             out.push_str(arg);
             return;

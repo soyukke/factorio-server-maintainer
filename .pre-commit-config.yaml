@@ -1,0 +1,22 @@
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.28.0
+    hooks:
+      - id: gitleaks
+  - repo: local
+    hooks:
+      - id: fmt
+        name: cargo fmt
+        entry: just fmt
+        language: system
+        pass_filenames: false
+      - id: lint
+        name: cargo clippy
+        entry: just lint
+        language: system
+        pass_filenames: false
+      - id: test
+        name: cargo test
+        entry: just test
+        language: system
+        pass_filenames: false

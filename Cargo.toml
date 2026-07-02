@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "crates/gsm-core",
     "crates/ctrlc-helper",
-    "crates/valheim",
+    "crates/factorio",
     "crates/gui-slint",
 ]
 
@@ -45,6 +45,7 @@ slint-build = "1.8"
 # the FFI we use in ctrlc-helper and gsm-core::process.
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_System_Console",
     "Win32_System_Threading",
 ] }

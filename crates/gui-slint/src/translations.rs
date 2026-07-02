@@ -3,6 +3,7 @@
 //! Log-event prefixes (`[saved]`, `[+]`, `[-]`, ...) and error messages are
 //! intentionally left in English: they're technical, easier to grep, and
 //! we don't want translation to mask the real diagnostic.
+#![allow(dead_code)]
 
 use gsm_core::{AppConfig, Language, ServerStatus};
 
@@ -11,12 +12,17 @@ use gsm_core::{AppConfig, Language, ServerStatus};
 pub const COMBAT_VALUES: &[&str] = &["default", "veryeasy", "easy", "hard", "veryhard"];
 pub const DEATHPENALTY_VALUES: &[&str] = &["default", "casual", "veryeasy", "hard", "hardcore"];
 pub const RESOURCES_VALUES: &[&str] = &["default", "muchless", "less", "more", "muchmore"];
-pub const RAIDS_VALUES: &[&str] =
-    &["default", "none", "muchless", "less", "more", "muchmore"];
+pub const RAIDS_VALUES: &[&str] = &["default", "none", "muchless", "less", "more", "muchmore"];
 pub const PORTALS_VALUES: &[&str] = &["default", "casual", "hard", "veryhard"];
 // First slot intentionally empty: "(none)" in display, no -preset flag emitted.
 pub const PRESET_VALUES: &[&str] = &[
-    "", "default", "casual", "hard", "hardcore", "immersive", "hammer",
+    "",
+    "default",
+    "casual",
+    "hard",
+    "hardcore",
+    "immersive",
+    "hammer",
 ];
 
 /// Return the index whose value matches `value`, defaulting to 0 ("default"
@@ -52,6 +58,9 @@ pub struct Strings {
     pub group_players: &'static str,
     pub group_backup: &'static str,
     pub group_log: &'static str,
+    pub progress_steamcmd: &'static str,
+    pub progress_factorio: &'static str,
+    pub progress_server: &'static str,
 
     // Players & Backups buttons / placeholders
     pub btn_refresh: &'static str,
@@ -85,6 +94,7 @@ pub struct Strings {
     pub lbl_public_address: &'static str,
     pub public_address_hint: &'static str,
     pub btn_copy: &'static str,
+    pub btn_tailscale: &'static str,
     pub copy_success: &'static str,
     pub copy_failed: &'static str,
     pub save_success: &'static str,
@@ -101,6 +111,7 @@ pub struct Strings {
 
     // Path labels
     pub lbl_steamcmd: &'static str,
+    pub lbl_steam_user: &'static str,
     pub lbl_server_dir: &'static str,
     pub lbl_save_dir: &'static str,
     pub lbl_backup_dir: &'static str,
@@ -115,6 +126,7 @@ pub struct Strings {
     pub lbl_public: &'static str,
     pub lbl_save_interval: &'static str,
     pub lbl_backups: &'static str,
+    pub lbl_dlc: &'static str,
 
     // World modifiers
     pub lbl_preset: &'static str,
@@ -154,7 +166,8 @@ pub struct Strings {
     pub key_devcommands: &'static str,
     pub key_devcommands_desc: &'static str,
 
-    // Manager — Valheim internal backup intervals (-backupshort / -backuplong)
+    // Manager intervals retained in config for compatibility. Factorio does
+    // not consume these directly.
     pub lbl_backup_short: &'static str,
     pub lbl_backup_long: &'static str,
     pub backup_intervals_hint: &'static str,
@@ -179,6 +192,8 @@ pub struct Strings {
     pub status_stopping: &'static str,
     pub status_crashed: &'static str,
     pub status_updating: &'static str,
+    pub install_ready: &'static str,
+    pub install_missing: &'static str,
 
     // Summary labels
     pub sum_steamcmd: &'static str,
@@ -197,13 +212,14 @@ pub struct Strings {
     pub sum_password: &'static str,
     pub sum_password_unset: &'static str,
     pub sum_password_set: &'static str,
+    pub sum_steam_login: &'static str,
 
     pub no_config_prefix: &'static str,
     pub no_config_suffix: &'static str,
 }
 
 pub const JA: Strings = Strings {
-    app_title: "Valheim サーバーメンテナー",
+    app_title: "Factorio サーバーメンテナー",
 
     group_setup: "セットアップ",
     group_paths: "パス",
@@ -214,6 +230,9 @@ pub const JA: Strings = Strings {
     group_players: "接続中プレイヤー",
     group_backup: "バックアップ",
     group_log: "ログ",
+    progress_steamcmd: "SteamCMD",
+    progress_factorio: "Factorio本体",
+    progress_server: "サーバー",
 
     btn_refresh: "更新",
     btn_rollback: "ロールバック",
@@ -221,7 +240,7 @@ pub const JA: Strings = Strings {
     no_players: "接続中のプレイヤーはいません",
     no_backups: "バックアップはまだありません",
 
-    backup_window_title: "バックアップ管理 — Valheim サーバーメンテナー",
+    backup_window_title: "バックアップ管理 — Factorio サーバーメンテナー",
     backup_sidebar_paths: "パス",
     backup_sidebar_list: "一覧",
     backup_tab_manual: "手動",
@@ -242,6 +261,7 @@ pub const JA: Strings = Strings {
     lbl_public_address: "公開アドレス:",
     public_address_hint: "他のプレイヤーが接続に使用するアドレスです。playit.gg トンネル、Tailscale 名、グローバル IP など自由に入力できます。Enter で保存、「コピー」で共有用にクリップボードへ。",
     btn_copy: "コピー",
+    btn_tailscale: "Tailscale",
     copy_success: "クリップボードにコピーしました",
     copy_failed: "コピーに失敗しました",
     save_success: "保存しました",
@@ -255,6 +275,7 @@ pub const JA: Strings = Strings {
     btn_save: "保存して再起動",
 
     lbl_steamcmd: "SteamCMD 実行ファイル:",
+    lbl_steam_user: "Steamユーザー名:",
     lbl_server_dir: "サーバーフォルダ:",
     lbl_save_dir: "セーブフォルダ:",
     lbl_backup_dir: "バックアップフォルダ:",
@@ -268,6 +289,7 @@ pub const JA: Strings = Strings {
     lbl_public: "公開 (0 / 1):",
     lbl_save_interval: "セーブ間隔 (秒):",
     lbl_backups: "バックアップ保持数:",
+    lbl_dlc: "DLC:",
 
     lbl_preset: "プリセット",
     lbl_combat: "戦闘",
@@ -276,7 +298,7 @@ pub const JA: Strings = Strings {
     lbl_raids: "襲撃頻度",
     lbl_portals: "ポータル",
 
-    world_window_title: "ワールド設定 — Valheim サーバーメンテナー",
+    world_window_title: "ワールド設定 — Factorio サーバーメンテナー",
     btn_open_world: "ワールド設定を開く…",
     world_done: "適用",
     world_cancel: "キャンセル",
@@ -306,7 +328,7 @@ pub const JA: Strings = Strings {
 
     lbl_backup_short: "短期バックアップ間隔 (秒):",
     lbl_backup_long: "長期バックアップ間隔 (秒):",
-    backup_intervals_hint: "Valheim 内蔵バックアップの間隔です。本ツールのスナップショットとは別系統。既定: 短期 7200 = 2 時間 / 長期 43200 = 12 時間。",
+    backup_intervals_hint: "Factorio では未使用の互換設定です。本ツールのスナップショットはセーブ zip をコピーします。",
 
     preset_labels: &[
         "(なし)", "デフォルト", "カジュアル", "難しい", "ハードコア", "イマーシブ", "ハンマー",
@@ -336,6 +358,8 @@ pub const JA: Strings = Strings {
     status_stopping: "停止処理中",
     status_crashed: "クラッシュ",
     status_updating: "更新中",
+    install_ready: "Factorio本体: インストール済み",
+    install_missing: "Factorio本体: 未インストール。まず「サーバーをインストール／更新」を実行してください。",
 
     sum_steamcmd: "SteamCMD:    ",
     sum_server_dir: "サーバー:    ",
@@ -353,13 +377,14 @@ pub const JA: Strings = Strings {
     sum_password: "パスワード: ",
     sum_password_unset: "(未設定)",
     sum_password_set: "****",
+    sum_steam_login: "SteamCMDログイン: ",
 
     no_config_prefix: "設定ファイルがありません (",
     no_config_suffix: ") — フィールドを埋めて「保存して再起動」を押してください。",
 };
 
 pub const EN: Strings = Strings {
-    app_title: "Valheim Server Manager",
+    app_title: "Factorio Server Manager",
 
     group_setup: "Setup",
     group_paths: "Paths",
@@ -370,6 +395,9 @@ pub const EN: Strings = Strings {
     group_players: "Connected players",
     group_backup: "Backups",
     group_log: "Log",
+    progress_steamcmd: "SteamCMD",
+    progress_factorio: "Factorio",
+    progress_server: "Server",
 
     btn_refresh: "Refresh",
     btn_rollback: "Rollback",
@@ -377,7 +405,7 @@ pub const EN: Strings = Strings {
     no_players: "No players connected",
     no_backups: "No backups yet",
 
-    backup_window_title: "Backup management — Valheim Server Manager",
+    backup_window_title: "Backup management — Factorio Server Manager",
     backup_sidebar_paths: "Paths",
     backup_sidebar_list: "List",
     backup_tab_manual: "Manual",
@@ -398,6 +426,7 @@ pub const EN: Strings = Strings {
     lbl_public_address: "Public address:",
     public_address_hint: "Address other players use to connect — a playit.gg tunnel, Tailscale name, public IP, etc. Press Enter to save, Copy to put it on the clipboard.",
     btn_copy: "Copy",
+    btn_tailscale: "Tailscale",
     copy_success: "Copied to clipboard",
     copy_failed: "Copy failed",
     save_success: "Saved",
@@ -411,6 +440,7 @@ pub const EN: Strings = Strings {
     btn_save: "Save & restart",
 
     lbl_steamcmd: "SteamCMD exe:",
+    lbl_steam_user: "Steam username:",
     lbl_server_dir: "Server dir:",
     lbl_save_dir: "Save dir:",
     lbl_backup_dir: "Backup dir:",
@@ -424,6 +454,7 @@ pub const EN: Strings = Strings {
     lbl_public: "Public (0 or 1):",
     lbl_save_interval: "Save interval (sec):",
     lbl_backups: "Backups kept:",
+    lbl_dlc: "DLC:",
 
     lbl_preset: "Preset",
     lbl_combat: "Combat",
@@ -432,7 +463,7 @@ pub const EN: Strings = Strings {
     lbl_raids: "Raids",
     lbl_portals: "Portals",
 
-    world_window_title: "World settings — Valheim Server Manager",
+    world_window_title: "World settings — Factorio Server Manager",
     btn_open_world: "Open world settings…",
     world_done: "Apply",
     world_cancel: "Cancel",
@@ -462,7 +493,7 @@ pub const EN: Strings = Strings {
 
     lbl_backup_short: "Backup short interval (sec):",
     lbl_backup_long: "Backup long interval (sec):",
-    backup_intervals_hint: "Valheim's built-in world backup cadence (separate from this tool's snapshots). Defaults: short 7200 = 2h, long 43200 = 12h.",
+    backup_intervals_hint: "Compatibility setting not used by Factorio. This tool's snapshots copy the save zip.",
 
     preset_labels: &[
         "(none)", "Default", "Casual", "Hard", "Hardcore", "Immersive", "Hammer",
@@ -492,6 +523,8 @@ pub const EN: Strings = Strings {
     status_stopping: "Stopping",
     status_crashed: "Crashed",
     status_updating: "Updating",
+    install_ready: "Factorio: installed",
+    install_missing: "Factorio: not installed. Run Install / Update server first.",
 
     sum_steamcmd: "SteamCMD:    ",
     sum_server_dir: "Server dir:  ",
@@ -509,6 +542,7 @@ pub const EN: Strings = Strings {
     sum_password: "Password: ",
     sum_password_unset: "(unset)",
     sum_password_set: "****",
+    sum_steam_login: "SteamCMD login: ",
 
     no_config_prefix: "No config at ",
     no_config_suffix: " — fill in the fields and press Save & restart.",
@@ -535,11 +569,16 @@ pub fn status_label(s: ServerStatus, t: &Strings) -> &'static str {
 pub fn render_paths_summary(cfg: &AppConfig, t: &Strings) -> String {
     format!(
         "{}{}\n{}{}\n{}{}\n{}{}\n{}{}",
-        t.sum_steamcmd, cfg.paths.steamcmd.display(),
-        t.sum_server_dir, cfg.paths.server_dir.display(),
-        t.sum_save_dir, cfg.paths.save_dir.display(),
-        t.sum_backup_dir, cfg.paths.backup_dir.display(),
-        t.sum_log_file, cfg.paths.log_file.display(),
+        t.sum_steamcmd,
+        cfg.paths.steamcmd.display(),
+        t.sum_server_dir,
+        cfg.paths.server_dir.display(),
+        t.sum_save_dir,
+        cfg.paths.save_dir.display(),
+        t.sum_backup_dir,
+        cfg.paths.backup_dir.display(),
+        t.sum_log_file,
+        cfg.paths.log_file.display(),
     )
 }
 
@@ -549,15 +588,31 @@ pub fn render_params_summary(cfg: &AppConfig, t: &Strings) -> String {
     } else {
         t.sum_password_set
     };
+    let steam_login = if cfg.manager.steam_username.trim().is_empty() {
+        "anonymous"
+    } else {
+        cfg.manager.steam_username.trim()
+    };
     format!(
-        "{}{}\n{}{}\n{}{}{}\n{}{}\n{}{}{}\n{}{}\n{}{}",
-        t.sum_name, cfg.server.name,
-        t.sum_world, cfg.server.world,
-        t.sum_port, cfg.server.port, t.sum_port_note,
-        t.sum_public, cfg.server.public,
-        t.sum_save_interval, cfg.server.save_interval, t.sum_save_interval_unit,
-        t.sum_backups, cfg.server.backups,
-        t.sum_password, pw,
+        "{}{}\n{}{}\n{}{}{}\n{}{}\n{}{}{}\n{}{}\n{}{}\n{}{}",
+        t.sum_name,
+        cfg.server.name,
+        t.sum_world,
+        cfg.server.world,
+        t.sum_port,
+        cfg.server.port,
+        t.sum_port_note,
+        t.sum_public,
+        cfg.server.public,
+        t.sum_save_interval,
+        cfg.server.save_interval,
+        t.sum_save_interval_unit,
+        t.sum_backups,
+        cfg.server.backups,
+        t.sum_password,
+        pw,
+        t.sum_steam_login,
+        steam_login,
     )
 }
 

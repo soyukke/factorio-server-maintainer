@@ -16,6 +16,21 @@
 Thumbs.db
 .DS_Store
 
+# Local secrets / scanner output
+.env
+.env.*
+!.env.example
+gitleaks-report.*
+
 # Manager-side runtime state (created by the GUI at runtime)
 state.toml
 config.toml
+
+# Local runtime / backup directories if someone points setup inside the repo
+.factorio-server-maintainer/
+.game-server-backups/
+FactorioServerMaintainer/
+Backups/
+Saves/
+Server/
+SteamCMD/

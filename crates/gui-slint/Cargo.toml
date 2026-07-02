@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Slint front-end for the Valheim server manager."
+description = "Slint front-end for the Factorio server manager."
 
 # Pin the Slint style so the build is deterministic and TabWidget / Button /
 # LineEdit etc. render with a known modern look regardless of host theme.
@@ -13,12 +13,12 @@ description = "Slint front-end for the Valheim server manager."
 style = "fluent"
 
 [[bin]]
-name = "valheim-server-manager"
+name = "factorio-server-manager"
 path = "src/main.rs"
 
 [dependencies]
 gsm-core = { path = "../gsm-core" }
-valheim = { path = "../valheim" }
+factorio = { path = "../factorio" }
 slint.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
@@ -31,3 +31,4 @@ arboard = "3"
 
 [build-dependencies]
 slint-build.workspace = true
+winresource = "0.1"

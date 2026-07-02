@@ -35,33 +35,17 @@ pub struct ServerConfig {
     /// Spec §6.6: fixed to `false` for the Steam-backend + playit topology.
     #[serde(default)]
     pub crossplay: bool,
-
-    // Valheim world modifiers (game-agnostic to the config schema but
-    // game-specific in meaning). Stored as raw cmdline tokens such as
-    // "veryeasy" / "muchmore" so we can emit them directly. Empty string
-    // means "no preset chosen". Defaults to "default" / "" so previous
-    // configs without these fields still load.
-    #[serde(default = "default_modifier")]
-    pub mod_combat: String,
-    #[serde(default = "default_modifier")]
-    pub mod_deathpenalty: String,
-    #[serde(default = "default_modifier")]
-    pub mod_resources: String,
-    #[serde(default = "default_modifier")]
-    pub mod_raids: String,
-    #[serde(default = "default_modifier")]
-    pub mod_portals: String,
     #[serde(default)]
-    pub preset: String,
-
-    /// Boolean world keys passed via `-setkey <name>`. Each entry is one
-    /// key (e.g. `"nobuildcost"`, `"nomap"`). Order doesn't matter.
-    #[serde(default)]
-    pub world_keys: Vec<String>,
+    pub dlc: FactorioDlc,
 }
 
-fn default_modifier() -> String {
-    "default".to_string()
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub enum FactorioDlc {
+    #[default]
+    #[serde(rename = "base")]
+    Base,
+    #[serde(rename = "space_age")]
+    SpaceAge,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -71,25 +55,13 @@ pub struct ManagerConfig {
     #[serde(default)]
     pub language: Language,
     /// Free-form connection address shown to other players (e.g. a
-    /// `tunnel.playit.gg:NNNNN` URL or a public IP). Purely informational;
-    /// not consumed by Valheim itself.
+    /// `tunnel.playit.gg:NNNNN` URL or a public IP). Purely informational.
     #[serde(default)]
     pub public_address: String,
-    /// Valheim's internal short-cycle world backup interval in seconds.
-    /// Passed as `-backupshort`. Default 7200 (2 hours).
-    #[serde(default = "default_backup_short_secs")]
-    pub backup_short_secs: u32,
-    /// Valheim's internal long-cycle world backup interval in seconds.
-    /// Passed as `-backuplong`. Default 43200 (12 hours).
-    #[serde(default = "default_backup_long_secs")]
-    pub backup_long_secs: u32,
-}
-
-fn default_backup_short_secs() -> u32 {
-    7200
-}
-fn default_backup_long_secs() -> u32 {
-    43200
+    /// Optional Steam account name used by SteamCMD for app updates.
+    /// Passwords are never stored here; SteamCMD caches its own login token.
+    #[serde(default)]
+    pub steam_username: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -108,8 +80,7 @@ impl Default for ManagerConfig {
             auto_backup_before_update: true,
             language: Language::default(),
             public_address: String::new(),
-            backup_short_secs: 7200,
-            backup_long_secs: 43200,
+            steam_username: String::new(),
         }
     }
 }
@@ -117,21 +88,15 @@ impl Default for ManagerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            name: "MyServer".into(),
+            name: "Factory".into(),
             world: "Dedicated".into(),
-            password: String::new(),
-            port: 2456,
+            password: "factorio".into(),
+            port: 34197,
             public: 0,
             save_interval: 900,
             backups: 4,
             crossplay: false,
-            mod_combat: "default".into(),
-            mod_deathpenalty: "default".into(),
-            mod_resources: "default".into(),
-            mod_raids: "default".into(),
-            mod_portals: "default".into(),
-            preset: String::new(),
-            world_keys: Vec::new(),
+            dlc: FactorioDlc::Base,
         }
     }
 }
@@ -190,11 +155,17 @@ impl AppConfig {
             ("paths.backup_dir", &self.paths.backup_dir),
             ("paths.log_file", &self.paths.log_file),
         ] {
-            v(p.is_absolute(), &format!("{label} must be an absolute path"))?;
+            v(
+                p.is_absolute(),
+                &format!("{label} must be an absolute path"),
+            )?;
         }
 
         // §6.6: parameter rules.
-        v(!self.server.name.is_empty(), "server.name must not be empty")?;
+        v(
+            !self.server.name.is_empty(),
+            "server.name must not be empty",
+        )?;
         v(
             !self.server.world.is_empty(),
             "server.world must not be empty",

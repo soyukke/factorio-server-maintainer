@@ -6,7 +6,7 @@ use tokio::sync::broadcast;
 
 #[async_trait]
 pub trait GameServerManager: Send + Sync {
-    /// Stable identifier. For example: `"valheim"`.
+    /// Stable identifier. For example: `"factorio"`.
     fn id(&self) -> &str;
 
     /// Install or update via SteamCMD. Caller guarantees the server is stopped.
