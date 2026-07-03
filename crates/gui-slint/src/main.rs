@@ -158,9 +158,19 @@ fn main() -> anyhow::Result<()> {
         // Done in a background task so the window appears immediately; the
         // event forwarder picks up the Running status flip when it resolves.
         let server_for_reattach = server.clone();
+        let state_for_reattach = state.clone();
+        let weak_for_reattach = ui.as_weak();
         tokio::spawn(async move {
             match server_for_reattach.try_reattach().await {
-                Ok(true) => tracing::info!("re-attached to running server"),
+                Ok(true) => {
+                    tracing::info!("re-attached to running server");
+                    restore_player_roster_from_log_async(
+                        server_for_reattach.config().paths.log_file.clone(),
+                        state_for_reattach,
+                        weak_for_reattach,
+                    )
+                    .await;
+                }
                 Ok(false) => {}
                 Err(e) => tracing::warn!(error = %e, "re-attach failed"),
             }
@@ -690,6 +700,90 @@ fn install_player_model(
     ui.set_player_rows(slint::ModelRc::from(model));
     ui.set_players_count_text(count_text.into());
     ui.set_simulation_state_text(simulation_text.into());
+}
+
+async fn restore_player_roster_from_log_async(
+    log_file: PathBuf,
+    state: Arc<Mutex<UiState>>,
+    weak: slint::Weak<MainWindow>,
+) {
+    let roster = match tokio::task::spawn_blocking(move || {
+        restore_player_roster_from_log(&log_file)
+    })
+    .await
+    {
+        Ok(Ok(roster)) => roster,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "failed to restore player roster from log");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "player roster restore task failed");
+            return;
+        }
+    };
+
+    let (rows, count_text, simulation_text) = {
+        let mut guard = state.lock().expect("state mutex poisoned");
+        guard.players = roster;
+        guard.player_roster_observed = true;
+        let t = translations::for_language(guard.language);
+        build_player_data(
+            &guard.players,
+            guard.last_status,
+            config_auto_pause(&guard.config),
+            t,
+        )
+    };
+
+    let _ = weak.upgrade_in_event_loop(move |ui| {
+        install_player_model(&ui, rows, count_text, simulation_text);
+    });
+}
+
+fn restore_player_roster_from_log(
+    log_file: &Path,
+) -> anyhow::Result<HashMap<String, chrono::DateTime<chrono::Local>>> {
+    let text = std::fs::read_to_string(log_file)
+        .with_context(|| format!("read {}", log_file.display()))?;
+    Ok(restore_player_roster_from_text(&text))
+}
+
+fn restore_player_roster_from_text(text: &str) -> HashMap<String, chrono::DateTime<chrono::Local>> {
+    let mut players = HashMap::new();
+    let now = chrono::Local::now();
+    let recent_session = text
+        .rsplit_once("Hosting game")
+        .map_or(text, |(_, tail)| tail);
+
+    for line in recent_session.lines() {
+        if let Some(name) = parse_factorio_join_name(line) {
+            players.insert(name.to_string(), now);
+        } else if let Some(name) = parse_factorio_left_name(line) {
+            players.remove(name);
+        }
+    }
+
+    players
+}
+
+fn parse_factorio_join_name(line: &str) -> Option<&str> {
+    line.split_once(" joined the game")
+        .map(|(name, _)| trim_factorio_player_prefix(name))
+        .filter(|name| !name.is_empty())
+}
+
+fn parse_factorio_left_name(line: &str) -> Option<&str> {
+    line.split_once(" left the game")
+        .map(|(name, _)| trim_factorio_player_prefix(name))
+        .filter(|name| !name.is_empty())
+}
+
+fn trim_factorio_player_prefix(value: &str) -> &str {
+    value
+        .rsplit_once(": ")
+        .map_or(value, |(_, name)| name)
+        .trim()
 }
 
 fn config_auto_pause(config: &Option<AppConfig>) -> bool {
@@ -1899,5 +1993,20 @@ mod tests {
             find_json_string_value(json, "DNSName").as_deref(),
             Some("server.example.ts.net.")
         );
+    }
+
+    #[test]
+    fn restores_player_roster_from_latest_log_session() {
+        let text = "\
+old joined the game
+Hosting game at IP ADDR
+123.456 Info ServerMultiplayerManager.cpp:123: alice joined the game
+bob joined the game
+alice left the game
+";
+        let roster = restore_player_roster_from_text(text);
+        assert!(!roster.contains_key("old"));
+        assert!(!roster.contains_key("alice"));
+        assert!(roster.contains_key("bob"));
     }
 }

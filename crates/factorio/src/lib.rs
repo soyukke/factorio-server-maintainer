@@ -898,15 +898,22 @@ fn parse_log_line(line: &str) -> Vec<ServerEvent> {
 }
 
 fn parse_join_name(line: &str) -> Option<&str> {
-    line.split(" joined the game")
-        .next()
-        .filter(|s| s.len() != line.len())
+    line.split_once(" joined the game")
+        .map(|(name, _)| trim_player_prefix(name))
+        .filter(|name| !name.is_empty())
 }
 
 fn parse_left_name(line: &str) -> Option<&str> {
-    line.split(" left the game")
-        .next()
-        .filter(|s| s.len() != line.len())
+    line.split_once(" left the game")
+        .map(|(name, _)| trim_player_prefix(name))
+        .filter(|name| !name.is_empty())
+}
+
+fn trim_player_prefix(value: &str) -> &str {
+    value
+        .rsplit_once(": ")
+        .map_or(value, |(_, name)| name)
+        .trim()
 }
 
 #[allow(dead_code)]
@@ -949,6 +956,15 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, ServerEvent::Log(s) if s == "[+] alice")));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, ServerEvent::PlayerJoined { name } if name == "alice")));
+    }
+
+    #[test]
+    fn parses_player_name_with_factorio_log_prefix() {
+        let events =
+            parse_log_line("123.456 Info ServerMultiplayerManager.cpp:123: alice joined the game");
         assert!(events
             .iter()
             .any(|e| matches!(e, ServerEvent::PlayerJoined { name } if name == "alice")));

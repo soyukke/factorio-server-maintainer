@@ -8,20 +8,20 @@
 // by Section headers, LabelCell hovers, CategoryButton highlights, popup
 // borders. Pulled from the ARKSA sister project for visual consistency.
 export global AppTheme {
-    out property <color> accent: #1ABC9C;          // turquoise
-    out property <color> accent-hover: #16A085;
-    out property <color> accent-soft: #1ABC9C40;   // ~25% alpha
-    out property <color> header-bg: #0F2A2E;       // very dark teal
-    out property <color> header-fg: #1ABC9C;       // turquoise text
-    out property <color> border: #1ABC9C66;        // turquoise w/ alpha
-    out property <color> on-accent: #0E2628;       // dark text on accent bg
-    out property <color> surface: #101820;
-    out property <color> surface-2: #17222c;
-    out property <color> text: #e6edf3;
-    out property <color> muted: #9fb0bd;
-    out property <color> ok: #4ade80;
-    out property <color> warn: #facc15;
-    out property <color> bad: #fb7185;
+    out property <color> accent: #d88a24;
+    out property <color> accent-hover: #f0a43a;
+    out property <color> accent-soft: #d88a2438;
+    out property <color> header-bg: #201a13;
+    out property <color> header-fg: #f0b35a;
+    out property <color> border: #8a6335;
+    out property <color> on-accent: #21170e;
+    out property <color> surface: #151719;
+    out property <color> surface-2: #222529;
+    out property <color> text: #e7dfd1;
+    out property <color> muted: #a99b87;
+    out property <color> ok: #88b64a;
+    out property <color> warn: #e3b248;
+    out property <color> bad: #c85d45;
 }
 
 // Row models for the Players and Backups sections. Rust populates the
@@ -93,12 +93,12 @@ component StatusStep inherits Rectangle {
     horizontal-stretch: 1;
     border-radius: 4px;
     background: root.done
-        ? #163c2a
-        : (root.active ? #3b3415 : AppTheme.surface-2);
+        ? #263116
+        : (root.active ? #3b2b16 : AppTheme.surface-2);
     border-width: 1px;
     border-color: root.done
         ? AppTheme.ok
-        : (root.active ? AppTheme.warn : #32414d);
+        : (root.active ? AppTheme.warn : #4b4a45);
 
     HorizontalBox {
         padding-left: 10px;
@@ -110,7 +110,7 @@ component StatusStep inherits Rectangle {
             border-radius: 5px;
             background: root.done
                 ? AppTheme.ok
-                : (root.active ? AppTheme.warn : #5f6f7d);
+                : (root.active ? AppTheme.warn : #756653);
         }
         Text {
             text: root.label;
@@ -156,6 +156,68 @@ component CategoryButton inherits Rectangle {
     touch := TouchArea {
         clicked => { root.clicked(); }
     }
+}
+
+component MainNavButton inherits Rectangle {
+    in property <string> label;
+    in property <int> index;
+    in property <int> current-index;
+    callback clicked;
+
+    width: 170px;
+    height: 40px;
+    border-radius: 3px;
+    border-width: 1px;
+    border-color: root.index == root.current-index ? AppTheme.accent : #4a4035;
+    background: root.index == root.current-index
+        ? #2b2116
+        : (touch.has-hover ? #24211d : AppTheme.surface);
+
+    HorizontalBox {
+        padding-left: 0;
+        padding-right: 10px;
+        spacing: 9px;
+        Rectangle {
+            width: 4px;
+            background: root.index == root.current-index ? AppTheme.accent : #4a4035;
+        }
+        Text {
+            text: root.label;
+            color: root.index == root.current-index ? AppTheme.header-fg : AppTheme.text;
+            font-weight: root.index == root.current-index ? 700 : 500;
+            font-size: 13px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component CompactButton inherits Button {
+    height: 28px;
+    min-width: 72px;
+}
+
+component ActionButton inherits Button {
+    height: 32px;
+    width: 72px;
+}
+
+component WideButton inherits Button {
+    height: 28px;
+    width: 112px;
+}
+
+component CompactLineEdit inherits LineEdit {
+    height: 28px;
+}
+
+component CompactComboBox inherits ComboBox {
+    height: 28px;
 }
 
 // Standalone Window for World Settings. Sidebar + right pane pattern from
@@ -838,11 +900,11 @@ export component BackupWindow inherits Window {
 export component MainWindow inherits Window {
     title: "Factorio Server Manager";
     icon: @image-url("../../../assets/icon.png");
-    preferred-width: 960px;
-    preferred-height: 820px;
-    min-width: 780px;
-    min-height: 600px;
-    background: #0a1218;
+    preferred-width: 980px;
+    preferred-height: 760px;
+    min-width: 820px;
+    min-height: 560px;
+    background: #0e0f10;
 
     // Note: std-widgets follow the OS color scheme automatically (fluent
     // style). On a Windows host in dark mode the buttons/LineEdits/etc.
@@ -997,174 +1059,435 @@ export component MainWindow inherits Window {
     callback add-mod-portal-clicked();
 
     // Reusable widths
-    property <length> label-w: 220px;
-    property <length> label-w-wide: 280px;
+    property <length> label-w: 168px;
+    property <length> label-w-wide: 220px;
+    in-out property <int> main-tab: 0;
 
-    ScrollView {
-        VerticalBox {
-            padding: 16px;
-            spacing: 14px;
+    VerticalBox {
+        padding: 12px;
+        spacing: 8px;
 
-            // ----- Setup -----
-            Section {
-                title: root.t-group-setup;
-                HorizontalLayout {
+        Section {
+            title: root.t-group-status;
+            HorizontalBox {
+                spacing: 12px;
+                VerticalBox {
+                    horizontal-stretch: 1;
                     spacing: 8px;
                     Text {
-                        text: root.t-lbl-language;
-                        color: #cfd5db;
-                        vertical-alignment: center;
-                        width: root.label-w;
+                        text: root.t-server-prefix + root.status-text;
+                        color: AppTheme.text;
+                        font-size: 16px;
+                        font-weight: 700;
+                        wrap: word-wrap;
                     }
-                    ComboBox {
-                        model: ["日本語", "English"];
-                        current-index: root.language-index;
-                        selected(value) => {
-                            root.language-changed(value == "日本語" ? 0 : 1);
+                    HorizontalLayout {
+                        spacing: 8px;
+                        StatusStep {
+                            label: root.t-progress-steamcmd;
+                            done: root.steamcmd-ready;
+                            active: root.busy && !root.steamcmd-ready;
+                        }
+                        StatusStep {
+                            label: root.t-progress-factorio;
+                            done: root.factorio-ready;
+                            active: root.busy && root.steamcmd-ready && !root.factorio-ready;
+                        }
+                        StatusStep {
+                            label: root.t-progress-server;
+                            done: root.server-running;
+                            active: root.busy && root.factorio-ready;
                         }
                     }
-                    Rectangle { horizontal-stretch: 1; }
+                    if root.busy : ProgressIndicator {
+                        indeterminate: true;
+                        height: 6px;
+                    }
+                    Text {
+                        text: root.install-status-text;
+                        color: root.factorio-ready ? AppTheme.ok : AppTheme.warn;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
                 }
-                HorizontalLayout {
+                Rectangle {
+                    width: 184px;
+                    background: #101112;
+                    border-color: #5d4930;
+                    border-width: 1px;
+                    border-radius: 3px;
+                    VerticalBox {
+                        padding: 7px;
+                        spacing: 6px;
+                        HorizontalBox {
+                            spacing: 6px;
+                            ActionButton {
+                                text: root.t-btn-start;
+                                enabled: root.server-controls-enabled && !root.busy && !root.server-running;
+                                clicked => { root.start-clicked(); }
+                            }
+                            ActionButton {
+                                text: root.t-btn-stop;
+                                enabled: root.server-controls-enabled && !root.busy && root.server-running;
+                                clicked => { root.stop-clicked(); }
+                            }
+                        }
+                        HorizontalBox {
+                            spacing: 6px;
+                            ActionButton {
+                                text: root.t-btn-update;
+                                enabled: root.server-controls-enabled && !root.busy && !root.server-running;
+                                clicked => { root.update-clicked(); }
+                            }
+                            ActionButton {
+                                text: root.t-btn-save;
+                                primary: true;
+                                enabled: !root.busy;
+                                clicked => { root.save-settings(); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalBox {
+            vertical-stretch: 1;
+            spacing: 10px;
+
+            Rectangle {
+                width: 184px;
+                background: #111315;
+                border-color: #5d4930;
+                border-width: 1px;
+                border-radius: 4px;
+                VerticalBox {
+                    padding: 10px;
                     spacing: 8px;
                     Text {
-                        text: root.t-lbl-steam-user;
-                        color: #cfd5db;
-                        vertical-alignment: center;
-                        width: root.label-w;
+                        text: root.t-app-title;
+                        color: AppTheme.muted;
+                        font-size: 11px;
+                        wrap: word-wrap;
                     }
-                    LineEdit {
-                        text <=> root.steam-username;
-                        placeholder-text: "anonymous";
-                        horizontal-stretch: 1;
+                    MainNavButton { index: 0; current-index: root.main-tab; label: root.t-group-operation; clicked => { root.main-tab = 0; } }
+                    MainNavButton { index: 1; current-index: root.main-tab; label: root.t-group-saves; clicked => { root.main-tab = 1; } }
+                    MainNavButton { index: 2; current-index: root.main-tab; label: root.t-group-server; clicked => { root.main-tab = 2; } }
+                    MainNavButton { index: 3; current-index: root.main-tab; label: root.t-group-paths; clicked => { root.main-tab = 3; } }
+                    MainNavButton { index: 4; current-index: root.main-tab; label: root.t-group-mods; clicked => { root.main-tab = 4; } }
+                    Rectangle { vertical-stretch: 1; }
+                    Text {
+                        text: root.params-summary;
+                        color: #7c8a93;
+                        font-size: 11px;
+                        wrap: word-wrap;
                     }
                 }
             }
 
-            // ----- Paths -----
-            Section {
-                title: root.t-group-paths;
+            Rectangle {
+                vertical-stretch: 1;
+                horizontal-stretch: 1;
+                background: transparent;
 
+            if root.main-tab == 0: VerticalBox {
+                spacing: 10px;
+
+                Section {
+                    title: root.t-group-connection;
+                    horizontal-stretch: 1;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: root.t-lbl-public-address;
+                            color: #cfd5db;
+                            vertical-alignment: center;
+                        }
+                        CompactLineEdit {
+                            text <=> root.public-address;
+                            placeholder-text: "example.ts.net";
+                            horizontal-stretch: 1;
+                            accepted(value) => { root.public-address-accepted(value); }
+                        }
+                        CompactButton {
+                            text: root.t-btn-copy;
+                            enabled: root.public-address != "";
+                            clicked => { root.copy-public-address(); }
+                        }
+                        WideButton {
+                            text: root.t-btn-tailscale;
+                            clicked => { root.use-tailscale-address(); }
+                        }
+                    }
+                    Text {
+                        text: root.public-address-status != ""
+                            ? root.public-address-status
+                            : root.t-public-address-hint;
+                        color: root.public-address-status != "" ? AppTheme.accent : #7c8a93;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: root.t-lbl-simulation-state;
+                            color: AppTheme.accent;
+                            vertical-alignment: center;
+                            min-width: 120px;
+                        }
+                        Text {
+                            text: root.simulation-state-text;
+                            color: AppTheme.text;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                Section {
+                    title: root.t-group-players;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: root.player-rows.length == 0 ? root.t-no-players : root.players-count-text;
+                        color: #cfd5db;
+                        wrap: word-wrap;
+                    }
+                    for row in root.player-rows : Rectangle {
+                        background: #1a242c;
+                        border-radius: 3px;
+                        height: 30px;
+                        HorizontalLayout {
+                            padding: 6px;
+                            spacing: 8px;
+                            Text {
+                                text: row.player_name;
+                                color: #cfd5db;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: row.joined_at;
+                                color: #7c8a93;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.main-tab == 1: VerticalBox {
+                spacing: 10px;
+
+                Section {
+                    title: root.t-group-saves;
+                    horizontal-stretch: 1;
+                    HorizontalLayout { spacing: 8px;
+                        Text { text: root.t-lbl-existing-save; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                        CompactComboBox {
+                            model: root.save-worlds;
+                            horizontal-stretch: 1;
+                            selected(value) => { root.use-save-world(value); }
+                        }
+                        CompactButton {
+                            text: root.t-btn-refresh;
+                            clicked => { root.refresh-saves-clicked(); }
+                        }
+                    }
+                    HorizontalLayout { spacing: 8px;
+                        Text { text: root.t-lbl-world; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                        CompactLineEdit { text <=> root.world-name; horizontal-stretch: 1; }
+                        WideButton {
+                            text: root.t-btn-save-world;
+                            enabled: !root.busy;
+                            clicked => { root.save-settings(); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: root.backups-count-text;
+                            color: #cfd5db;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        CompactButton {
+                            text: root.t-btn-refresh;
+                            enabled: !root.busy;
+                            clicked => { root.refresh-backups-clicked(); }
+                        }
+                        WideButton {
+                            text: root.t-btn-open-backup;
+                            primary: true;
+                            enabled: root.server-controls-enabled;
+                            clicked => { root.open-backup-clicked(); }
+                        }
+                    }
+                }
+
+                Section {
+                    title: root.t-group-manager;
+                    horizontal-stretch: 1;
+                    CheckBox {
+                        text: root.t-chk-stop-when-empty;
+                        checked <=> root.stop-when-empty;
+                    }
+                    HorizontalLayout { spacing: 8px;
+                        Text {
+                            text: root.t-lbl-empty-stop-delay;
+                            color: #cfd5db;
+                            vertical-alignment: center;
+                            width: root.label-w;
+                        }
+                        CompactLineEdit { text <=> root.empty-stop-delay-secs; horizontal-stretch: 1; }
+                    }
+                    CheckBox {
+                        text: root.t-chk-auto-backup;
+                        checked <=> root.auto-backup-before-update;
+                    }
+                    HorizontalLayout { spacing: 8px;
+                        Text {
+                            text: root.t-lbl-graceful-stop;
+                            color: #cfd5db;
+                            vertical-alignment: center;
+                            width: root.label-w;
+                        }
+                        CompactLineEdit { text <=> root.graceful-stop-timeout-secs; horizontal-stretch: 1; }
+                    }
+                }
+            }
+
+            if root.main-tab == 2: VerticalBox {
+                spacing: 10px;
+                Section {
+                    title: root.t-group-server;
+                    horizontal-stretch: 1;
+                    HorizontalLayout { spacing: 8px;
+                        Text { text: root.t-lbl-name; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                        CompactLineEdit { text <=> root.server-name; horizontal-stretch: 1; }
+                    }
+                    HorizontalLayout { spacing: 8px;
+                        Text { text: root.t-lbl-password; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                        CompactLineEdit { text <=> root.server-password; input-type: password; horizontal-stretch: 1; }
+                    }
+                    HorizontalLayout { spacing: 8px;
+                        Text { text: root.t-lbl-port; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                        CompactLineEdit { text <=> root.server-port; horizontal-stretch: 1; }
+                    }
+                    HorizontalLayout { spacing: 8px;
+                        Text { text: root.t-lbl-public; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                        CompactLineEdit { text <=> root.server-public; horizontal-stretch: 1; }
+                    }
+                    HorizontalLayout { spacing: 8px;
+                        Text { text: root.t-lbl-save-interval; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                        CompactLineEdit { text <=> root.save-interval; horizontal-stretch: 1; }
+                    }
+                    HorizontalLayout { spacing: 8px;
+                        Text { text: root.t-lbl-backups; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                        CompactLineEdit { text <=> root.backup-count; horizontal-stretch: 1; }
+                    }
+                    HorizontalLayout { spacing: 8px;
+                        Text { text: root.t-lbl-dlc; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                        CompactComboBox {
+                            model: ["Base", "Space Age"];
+                            current-index <=> root.dlc-index;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                    CheckBox {
+                        text: root.t-chk-auto-pause;
+                        checked <=> root.auto-pause;
+                    }
+                }
+                Section {
+                    title: root.t-group-setup;
+                    horizontal-stretch: 1;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: root.t-lbl-language;
+                            color: #cfd5db;
+                            vertical-alignment: center;
+                            width: 100px;
+                        }
+                        CompactComboBox {
+                            model: ["日本語", "English"];
+                            current-index: root.language-index;
+                            selected(value) => {
+                                root.language-changed(value == "日本語" ? 0 : 1);
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: root.t-lbl-steam-user;
+                            color: #cfd5db;
+                            vertical-alignment: center;
+                            width: 100px;
+                        }
+                        CompactLineEdit {
+                            text <=> root.steam-username;
+                            placeholder-text: "anonymous";
+                            horizontal-stretch: 1;
+                        }
+                    }
+                }
+            }
+
+            if root.main-tab == 3: Section {
+                title: root.t-group-paths;
                 HorizontalLayout {
                     spacing: 8px;
                     Text { text: root.t-lbl-steamcmd; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    LineEdit { text <=> root.steamcmd-path; horizontal-stretch: 1; }
-                    Button { text: root.t-btn-browse; clicked => { root.browse-path("steamcmd"); } }
+                    CompactLineEdit { text <=> root.steamcmd-path; horizontal-stretch: 1; }
+                    CompactButton { text: root.t-btn-browse; clicked => { root.browse-path("steamcmd"); } }
                 }
                 HorizontalLayout {
                     spacing: 8px;
                     Text { text: root.t-lbl-server-dir; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    LineEdit { text <=> root.server-dir; horizontal-stretch: 1; }
-                    Button { text: root.t-btn-browse; clicked => { root.browse-path("server_dir"); } }
+                    CompactLineEdit { text <=> root.server-dir; horizontal-stretch: 1; }
+                    CompactButton { text: root.t-btn-browse; clicked => { root.browse-path("server_dir"); } }
                 }
                 HorizontalLayout {
                     spacing: 8px;
                     Text { text: root.t-lbl-save-dir; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    LineEdit { text <=> root.save-dir; horizontal-stretch: 1; }
-                    Button { text: root.t-btn-browse; clicked => { root.browse-path("save_dir"); } }
+                    CompactLineEdit { text <=> root.save-dir; horizontal-stretch: 1; }
+                    CompactButton { text: root.t-btn-browse; clicked => { root.browse-path("save_dir"); } }
                 }
                 HorizontalLayout {
                     spacing: 8px;
                     Text { text: root.t-lbl-backup-dir; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    LineEdit { text <=> root.backup-dir; horizontal-stretch: 1; }
-                    Button { text: root.t-btn-browse; clicked => { root.browse-path("backup_dir"); } }
+                    CompactLineEdit { text <=> root.backup-dir; horizontal-stretch: 1; }
+                    CompactButton { text: root.t-btn-browse; clicked => { root.browse-path("backup_dir"); } }
                 }
                 HorizontalLayout {
                     spacing: 8px;
                     Text { text: root.t-lbl-log-file; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    LineEdit { text <=> root.log-file; horizontal-stretch: 1; }
-                    Button { text: root.t-btn-browse; clicked => { root.browse-path("log_file"); } }
+                    CompactLineEdit { text <=> root.log-file; horizontal-stretch: 1; }
+                    CompactButton { text: root.t-btn-browse; clicked => { root.browse-path("log_file"); } }
                 }
             }
 
-            // ----- Server parameters -----
-            Section {
-                title: root.t-group-saves;
-
-                HorizontalLayout { spacing: 8px;
-                    Text { text: root.t-lbl-existing-save; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    ComboBox {
-                        model: root.save-worlds;
-                        horizontal-stretch: 1;
-                        selected(value) => {
-                            root.use-save-world(value);
-                        }
-                    }
-                    Button {
-                        text: root.t-btn-refresh;
-                        clicked => { root.refresh-saves-clicked(); }
-                    }
-                }
-                HorizontalLayout { spacing: 8px;
-                    Text { text: root.t-lbl-world; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    LineEdit { text <=> root.world-name; horizontal-stretch: 1; }
-                    Button {
-                        text: root.t-btn-save-world;
-                        enabled: !root.busy;
-                        clicked => { root.save-settings(); }
-                    }
-                }
-            }
-
-            Section {
-                title: root.t-group-server;
-
-                HorizontalLayout { spacing: 8px;
-                    Text { text: root.t-lbl-name; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    LineEdit { text <=> root.server-name; horizontal-stretch: 1; }
-                }
-                HorizontalLayout { spacing: 8px;
-                    Text { text: root.t-lbl-password; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    LineEdit { text <=> root.server-password; input-type: password; horizontal-stretch: 1; }
-                }
-                HorizontalLayout { spacing: 8px;
-                    Text { text: root.t-lbl-port; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    LineEdit { text <=> root.server-port; horizontal-stretch: 1; }
-                }
-                HorizontalLayout { spacing: 8px;
-                    Text { text: root.t-lbl-public; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    LineEdit { text <=> root.server-public; horizontal-stretch: 1; }
-                }
-                HorizontalLayout { spacing: 8px;
-                    Text { text: root.t-lbl-save-interval; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    LineEdit { text <=> root.save-interval; horizontal-stretch: 1; }
-                }
-                HorizontalLayout { spacing: 8px;
-                    Text { text: root.t-lbl-backups; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    LineEdit { text <=> root.backup-count; horizontal-stretch: 1; }
-                }
-                CheckBox {
-                    text: root.t-chk-auto-pause;
-                    checked <=> root.auto-pause;
-                }
-                HorizontalLayout { spacing: 8px;
-                    Text { text: root.t-lbl-dlc; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    ComboBox {
-                        model: ["Base", "Space Age"];
-                        current-index <=> root.dlc-index;
-                        horizontal-stretch: 1;
-                    }
-                }
-            }
-
-            Section {
+            if root.main-tab == 4: Section {
                 title: root.t-group-mods;
-
-                HorizontalLayout { spacing: 8px;
+                HorizontalLayout {
+                    spacing: 8px;
                     Text { text: root.t-lbl-mod-dir; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    LineEdit { text <=> root.mod-dir; read-only: true; horizontal-stretch: 1; }
-                    Button { text: root.t-btn-add-mod-zip; clicked => { root.add-mod-zip-clicked(); } }
-                    Button { text: root.t-btn-open-mod-dir; clicked => { root.open-mod-dir-clicked(); } }
-                    Button { text: root.t-btn-refresh; clicked => { root.refresh-mods-clicked(); } }
+                    CompactLineEdit { text <=> root.mod-dir; read-only: true; horizontal-stretch: 1; }
+                    WideButton { text: root.t-btn-add-mod-zip; clicked => { root.add-mod-zip-clicked(); } }
+                    WideButton { text: root.t-btn-open-mod-dir; clicked => { root.open-mod-dir-clicked(); } }
+                    CompactButton { text: root.t-btn-refresh; clicked => { root.refresh-mods-clicked(); } }
                 }
                 HorizontalLayout { spacing: 8px;
                     Text { text: root.t-lbl-mod-portal-name; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    LineEdit {
+                    CompactLineEdit {
                         text <=> root.mod-portal-name;
                         placeholder-text: "respawn-beacon";
                         horizontal-stretch: 1;
                     }
-                    Button { text: root.t-btn-add-mod-portal; clicked => { root.add-mod-portal-clicked(); } }
+                    WideButton { text: root.t-btn-add-mod-portal; clicked => { root.add-mod-portal-clicked(); } }
                 }
                 HorizontalLayout { spacing: 8px;
                     Text { text: root.t-lbl-detected-mods; color: #cfd5db; vertical-alignment: top; width: root.label-w; }
@@ -1172,7 +1495,7 @@ export component MainWindow inherits Window {
                         text: root.detected-mods-text;
                         read-only: true;
                         wrap: word-wrap;
-                        min-height: 70px;
+                        min-height: 80px;
                         horizontal-stretch: 1;
                     }
                 }
@@ -1181,262 +1504,22 @@ export component MainWindow inherits Window {
                     TextEdit {
                         text <=> root.enabled-mods-text;
                         wrap: word-wrap;
-                        min-height: 70px;
+                        min-height: 80px;
                         horizontal-stretch: 1;
                     }
                 }
             }
-
-            // ----- Manager + Save action -----
-            Section {
-                title: root.t-group-manager;
-
-                HorizontalLayout { spacing: 8px;
-                    Text {
-                        text: root.t-lbl-graceful-stop;
-                        color: #cfd5db;
-                        vertical-alignment: center;
-                        width: root.label-w-wide;
-                    }
-                    LineEdit { text <=> root.graceful-stop-timeout-secs; horizontal-stretch: 1; }
-                }
-                CheckBox {
-                    text: root.t-chk-auto-backup;
-                    checked <=> root.auto-backup-before-update;
-                }
-                CheckBox {
-                    text: root.t-chk-stop-when-empty;
-                    checked <=> root.stop-when-empty;
-                }
-                HorizontalLayout { spacing: 8px;
-                    Text {
-                        text: root.t-lbl-empty-stop-delay;
-                        color: #cfd5db;
-                        vertical-alignment: center;
-                        width: root.label-w-wide;
-                    }
-                    LineEdit { text <=> root.empty-stop-delay-secs; horizontal-stretch: 1; }
-                }
-                Text {
-                    text: root.error-text;
-                    color: #ff5555;
-                    wrap: word-wrap;
-                }
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    Rectangle { horizontal-stretch: 1; }
-                    Button {
-                        text: root.t-btn-save;
-                        primary: true;
-                        // Saving rewrites config.toml and respawns the exe
-                        // so we must not do it while the server is running
-                        // or any other op is in flight.
-                        enabled: !root.busy;
-                        clicked => { root.save-settings(); }
-                    }
-                }
             }
+        }
 
-            // ----- Server status -----
-            Section {
-                title: root.t-group-status;
-                HorizontalLayout {
-                    spacing: 8px;
-                    StatusStep {
-                        label: root.t-progress-steamcmd;
-                        done: root.steamcmd-ready;
-                        active: root.busy && !root.steamcmd-ready;
-                    }
-                    StatusStep {
-                        label: root.t-progress-factorio;
-                        done: root.factorio-ready;
-                        active: root.busy && root.steamcmd-ready && !root.factorio-ready;
-                    }
-                    StatusStep {
-                        label: root.t-progress-server;
-                        done: root.server-running;
-                        active: root.busy && root.factorio-ready;
-                    }
-                }
-                Text {
-                    text: root.install-status-text;
-                    color: root.factorio-ready ? AppTheme.ok : AppTheme.warn;
-                    font-size: 12px;
-                    wrap: word-wrap;
-                }
-                Text {
-                    text: root.t-server-prefix + root.status-text;
-                    color: AppTheme.text;
-                    font-size: 14px;
-                    wrap: word-wrap;
-                }
-                HorizontalLayout {
-                    spacing: 8px;
-                    Text {
-                        text: root.t-lbl-simulation-state;
-                        color: AppTheme.accent;
-                        vertical-alignment: center;
-                        min-width: 120px;
-                    }
-                    Text {
-                        text: root.simulation-state-text;
-                        color: AppTheme.text;
-                        vertical-alignment: center;
-                        horizontal-stretch: 1;
-                        wrap: word-wrap;
-                    }
-                }
-                // Indeterminate progress bar 窶・visible only while a
-                // long-running op is happening. Slint omits the element
-                // entirely (no reserved layout space) when the condition is
-                // false, so the section collapses cleanly when idle.
-                if root.busy : ProgressIndicator {
-                    indeterminate: true;
-                    height: 6px;
-                }
-                Rectangle { height: 6px; }
-                Text { text: root.paths-summary;  color: #7c8a93; wrap: word-wrap; }
-                Rectangle { height: 6px; }
-                Text { text: root.params-summary; color: #7c8a93; wrap: word-wrap; }
-            }
-
-            // ----- Connection (public address) -----
-            Section {
-                title: root.t-group-connection;
-                HorizontalLayout {
-                    spacing: 8px;
-                    Text {
-                        text: root.t-lbl-public-address;
-                        color: #cfd5db;
-                        vertical-alignment: center;
-                    }
-                    LineEdit {
-                        text <=> root.public-address;
-                        placeholder-text: "萓・ tunnel.playit.gg:12345  /  100.x.y.z";
-                        horizontal-stretch: 1;
-                        accepted(value) => { root.public-address-accepted(value); }
-                    }
-                    Button {
-                        text: root.t-btn-copy;
-                        enabled: root.public-address != "";
-                        clicked => { root.copy-public-address(); }
-                    }
-                    Button {
-                        text: root.t-btn-tailscale;
-                        clicked => { root.use-tailscale-address(); }
-                    }
-                }
-                Text {
-                    text: root.public-address-status != ""
-                        ? root.public-address-status
-                        : root.t-public-address-hint;
-                    color: root.public-address-status != ""
-                        ? AppTheme.accent
-                        : #7c8a93;
-                    font-size: 11px;
-                    wrap: word-wrap;
-                }
-            }
-
-            // ----- Server operations -----
-            Section {
-                title: root.t-group-operation;
-                HorizontalLayout {
-                    spacing: 8px;
-                    Button {
-                        text: root.t-btn-start;
-                        // Start only when config loaded, server not running,
-                        // and no other op in flight.
-                        enabled: root.server-controls-enabled && !root.busy && !root.server-running;
-                        clicked => { root.start-clicked(); }
-                    }
-                    Button {
-                        text: root.t-btn-stop;
-                        // Stop is the inverse 窶・only when actually running.
-                        enabled: root.server-controls-enabled && !root.busy && root.server-running;
-                        clicked => { root.stop-clicked(); }
-                    }
-                    Button {
-                        text: root.t-btn-update;
-                        // Same condition as Start: must be stopped + idle.
-                        enabled: root.server-controls-enabled && !root.busy && !root.server-running;
-                        clicked => { root.update-clicked(); }
-                    }
-                }
-            }
-
-            // ----- Connected players -----
-            Section {
-                title: root.t-group-players;
-
-                Text {
-                    text: root.player-rows.length == 0 ? root.t-no-players : root.players-count-text;
-                    color: #cfd5db;
-                    wrap: word-wrap;
-                }
-
-                for row in root.player-rows : Rectangle {
-                    background: #1a242c;
-                    border-radius: 3px;
-                    HorizontalLayout {
-                        padding: 6px;
-                        spacing: 8px;
-                        Text {
-                            text: row.player_name;
-                            color: #cfd5db;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                        }
-                        Text {
-                            text: row.joined_at;
-                            color: #7c8a93;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
-
-            // ----- Backups / Rollback (entry point) -----
-            // Backup management is in a separate window (BackupWindow). Here
-            // we only show the count and a button to open it.
-            Section {
-                title: root.t-group-backup;
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    Text {
-                        text: root.backups-count-text;
-                        color: #cfd5db;
-                        vertical-alignment: center;
-                        horizontal-stretch: 1;
-                    }
-                    Button {
-                        text: root.t-btn-refresh;
-                        enabled: !root.busy;
-                        clicked => { root.refresh-backups-clicked(); }
-                    }
-                    Button {
-                        text: root.t-btn-open-backup;
-                        primary: true;
-                        enabled: root.server-controls-enabled;
-                        clicked => { root.open-backup-clicked(); }
-                    }
-                }
-            }
-
-            // ----- Log -----
-            Section {
-                title: root.t-group-log;
-                // TextEdit is selectable + Ctrl+C copyable and scrolls
-                // internally. Left-aligned by default 窶・replaces the
-                // previously centered, read-only Text.
-                TextEdit {
-                    text: root.log-text;
-                    read-only: true;
-                    wrap: word-wrap;
-                    min-height: 220px;
-                }
+        Section {
+            title: root.t-group-log;
+            height: 96px;
+            TextEdit {
+                text: root.error-text != "" ? root.error-text + "\n" + root.log-text : root.log-text;
+                read-only: true;
+                wrap: word-wrap;
+                vertical-stretch: 1;
             }
         }
     }
