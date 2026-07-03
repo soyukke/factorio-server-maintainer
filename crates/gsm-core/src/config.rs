@@ -32,6 +32,10 @@ pub struct ServerConfig {
     pub public: u8,
     pub save_interval: u32,
     pub backups: u32,
+    #[serde(default = "default_true")]
+    pub auto_pause: bool,
+    #[serde(default)]
+    pub enabled_mods: Vec<String>,
     /// Spec §6.6: fixed to `false` for the Steam-backend + playit topology.
     #[serde(default)]
     pub crossplay: bool,
@@ -52,6 +56,10 @@ pub enum FactorioDlc {
 pub struct ManagerConfig {
     pub graceful_stop_timeout_secs: u32,
     pub auto_backup_before_update: bool,
+    #[serde(default)]
+    pub stop_when_empty: bool,
+    #[serde(default = "default_empty_stop_delay_secs")]
+    pub empty_stop_delay_secs: u32,
     #[serde(default)]
     pub language: Language,
     /// Free-form connection address shown to other players (e.g. a
@@ -78,6 +86,8 @@ impl Default for ManagerConfig {
         Self {
             graceful_stop_timeout_secs: 30,
             auto_backup_before_update: true,
+            stop_when_empty: true,
+            empty_stop_delay_secs: default_empty_stop_delay_secs(),
             language: Language::default(),
             public_address: String::new(),
             steam_username: String::new(),
@@ -95,10 +105,20 @@ impl Default for ServerConfig {
             public: 0,
             save_interval: 900,
             backups: 4,
+            auto_pause: true,
+            enabled_mods: Vec::new(),
             crossplay: false,
             dlc: FactorioDlc::Base,
         }
     }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_empty_stop_delay_secs() -> u32 {
+    300
 }
 
 #[derive(Debug, thiserror::Error)]

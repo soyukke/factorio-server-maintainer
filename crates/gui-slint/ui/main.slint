@@ -27,7 +27,7 @@ export global AppTheme {
 // Row models for the Players and Backups sections. Rust populates the
 // matching `[PlayerRow]` / `[BackupRow]` properties with localised content.
 export struct PlayerRow {
-    steam_id: string,
+    player_name: string,
     joined_at: string,
 }
 
@@ -886,12 +886,24 @@ export component MainWindow inherits Window {
     in property <string> t-lbl-public;
     in property <string> t-lbl-save-interval;
     in property <string> t-lbl-backups;
+    in property <string> t-chk-auto-pause;
+    in property <string> t-lbl-simulation-state;
     in property <string> t-lbl-dlc;
+    in property <string> t-group-mods;
+    in property <string> t-lbl-mod-dir;
+    in property <string> t-lbl-detected-mods;
+    in property <string> t-lbl-enabled-mods;
+    in property <string> t-lbl-mod-portal-name;
+    in property <string> t-btn-add-mod-zip;
+    in property <string> t-btn-add-mod-portal;
+    in property <string> t-btn-open-mod-dir;
 
     in-out property <int> dlc-index: 0;
 
     in property <string> t-lbl-graceful-stop;
     in property <string> t-chk-auto-backup;
+    in property <string> t-chk-stop-when-empty;
+    in property <string> t-lbl-empty-stop-delay;
 
     // Players / Backups translation strings
     in property <string> t-group-players;
@@ -904,6 +916,14 @@ export component MainWindow inherits Window {
     in-out property <string> backups-count-text;
 
     in-out property <[PlayerRow]> player-rows;
+
+    // Save selection
+    in property <string> t-group-saves;
+    in property <string> t-lbl-existing-save;
+    in property <string> t-btn-save-world;
+    in-out property <[string]> save-worlds;
+    callback refresh-saves-clicked();
+    callback use-save-world(string);
 
     // Connection (public address) section
     in property <string> t-group-connection;
@@ -946,8 +966,16 @@ export component MainWindow inherits Window {
     in-out property <string> server-public: "";
     in-out property <string> save-interval: "";
     in-out property <string> backup-count: "";
+    in-out property <bool> auto-pause: true;
+    in-out property <string> mod-dir: "";
+    in-out property <string> mod-portal-name: "";
+    in-out property <string> detected-mods-text: "";
+    in-out property <string> enabled-mods-text: "";
+    in-out property <string> simulation-state-text: "";
     in-out property <string> graceful-stop-timeout-secs: "";
     in-out property <bool> auto-backup-before-update: true;
+    in-out property <bool> stop-when-empty: true;
+    in-out property <string> empty-stop-delay-secs: "";
     in-out property <string> error-text: "";
 
     // 0 = ja, 1 = en
@@ -963,6 +991,10 @@ export component MainWindow inherits Window {
 
     callback refresh-backups-clicked();
     callback open-backup-clicked();
+    callback refresh-mods-clicked();
+    callback open-mod-dir-clicked();
+    callback add-mod-zip-clicked();
+    callback add-mod-portal-clicked();
 
     // Reusable widths
     property <length> label-w: 220px;
@@ -1047,15 +1079,39 @@ export component MainWindow inherits Window {
 
             // ----- Server parameters -----
             Section {
+                title: root.t-group-saves;
+
+                HorizontalLayout { spacing: 8px;
+                    Text { text: root.t-lbl-existing-save; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    ComboBox {
+                        model: root.save-worlds;
+                        horizontal-stretch: 1;
+                        selected(value) => {
+                            root.use-save-world(value);
+                        }
+                    }
+                    Button {
+                        text: root.t-btn-refresh;
+                        clicked => { root.refresh-saves-clicked(); }
+                    }
+                }
+                HorizontalLayout { spacing: 8px;
+                    Text { text: root.t-lbl-world; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    LineEdit { text <=> root.world-name; horizontal-stretch: 1; }
+                    Button {
+                        text: root.t-btn-save-world;
+                        enabled: !root.busy;
+                        clicked => { root.save-settings(); }
+                    }
+                }
+            }
+
+            Section {
                 title: root.t-group-server;
 
                 HorizontalLayout { spacing: 8px;
                     Text { text: root.t-lbl-name; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
                     LineEdit { text <=> root.server-name; horizontal-stretch: 1; }
-                }
-                HorizontalLayout { spacing: 8px;
-                    Text { text: root.t-lbl-world; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
-                    LineEdit { text <=> root.world-name; horizontal-stretch: 1; }
                 }
                 HorizontalLayout { spacing: 8px;
                     Text { text: root.t-lbl-password; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
@@ -1077,11 +1133,55 @@ export component MainWindow inherits Window {
                     Text { text: root.t-lbl-backups; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
                     LineEdit { text <=> root.backup-count; horizontal-stretch: 1; }
                 }
+                CheckBox {
+                    text: root.t-chk-auto-pause;
+                    checked <=> root.auto-pause;
+                }
                 HorizontalLayout { spacing: 8px;
                     Text { text: root.t-lbl-dlc; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
                     ComboBox {
                         model: ["Base", "Space Age"];
                         current-index <=> root.dlc-index;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+
+            Section {
+                title: root.t-group-mods;
+
+                HorizontalLayout { spacing: 8px;
+                    Text { text: root.t-lbl-mod-dir; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    LineEdit { text <=> root.mod-dir; read-only: true; horizontal-stretch: 1; }
+                    Button { text: root.t-btn-add-mod-zip; clicked => { root.add-mod-zip-clicked(); } }
+                    Button { text: root.t-btn-open-mod-dir; clicked => { root.open-mod-dir-clicked(); } }
+                    Button { text: root.t-btn-refresh; clicked => { root.refresh-mods-clicked(); } }
+                }
+                HorizontalLayout { spacing: 8px;
+                    Text { text: root.t-lbl-mod-portal-name; color: #cfd5db; vertical-alignment: center; width: root.label-w; }
+                    LineEdit {
+                        text <=> root.mod-portal-name;
+                        placeholder-text: "respawn-beacon";
+                        horizontal-stretch: 1;
+                    }
+                    Button { text: root.t-btn-add-mod-portal; clicked => { root.add-mod-portal-clicked(); } }
+                }
+                HorizontalLayout { spacing: 8px;
+                    Text { text: root.t-lbl-detected-mods; color: #cfd5db; vertical-alignment: top; width: root.label-w; }
+                    TextEdit {
+                        text: root.detected-mods-text;
+                        read-only: true;
+                        wrap: word-wrap;
+                        min-height: 70px;
+                        horizontal-stretch: 1;
+                    }
+                }
+                HorizontalLayout { spacing: 8px;
+                    Text { text: root.t-lbl-enabled-mods; color: #cfd5db; vertical-alignment: top; width: root.label-w; }
+                    TextEdit {
+                        text <=> root.enabled-mods-text;
+                        wrap: word-wrap;
+                        min-height: 70px;
                         horizontal-stretch: 1;
                     }
                 }
@@ -1103,6 +1203,19 @@ export component MainWindow inherits Window {
                 CheckBox {
                     text: root.t-chk-auto-backup;
                     checked <=> root.auto-backup-before-update;
+                }
+                CheckBox {
+                    text: root.t-chk-stop-when-empty;
+                    checked <=> root.stop-when-empty;
+                }
+                HorizontalLayout { spacing: 8px;
+                    Text {
+                        text: root.t-lbl-empty-stop-delay;
+                        color: #cfd5db;
+                        vertical-alignment: center;
+                        width: root.label-w-wide;
+                    }
+                    LineEdit { text <=> root.empty-stop-delay-secs; horizontal-stretch: 1; }
                 }
                 Text {
                     text: root.error-text;
@@ -1157,6 +1270,22 @@ export component MainWindow inherits Window {
                     color: AppTheme.text;
                     font-size: 14px;
                     wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: root.t-lbl-simulation-state;
+                        color: AppTheme.accent;
+                        vertical-alignment: center;
+                        min-width: 120px;
+                    }
+                    Text {
+                        text: root.simulation-state-text;
+                        color: AppTheme.text;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        wrap: word-wrap;
+                    }
                 }
                 // Indeterminate progress bar 窶・visible only while a
                 // long-running op is happening. Slint omits the element
@@ -1254,7 +1383,7 @@ export component MainWindow inherits Window {
                         padding: 6px;
                         spacing: 8px;
                         Text {
-                            text: row.steam_id;
+                            text: row.player_name;
                             color: #cfd5db;
                             vertical-alignment: center;
                             horizontal-stretch: 1;

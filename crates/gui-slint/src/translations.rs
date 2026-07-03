@@ -51,6 +51,7 @@ pub struct Strings {
     // Sections (the ARK-style stacked layout)
     pub group_setup: &'static str,
     pub group_paths: &'static str,
+    pub group_saves: &'static str,
     pub group_server: &'static str,
     pub group_manager: &'static str,
     pub group_status: &'static str,
@@ -117,6 +118,8 @@ pub struct Strings {
     pub lbl_backup_dir: &'static str,
     pub lbl_log_file: &'static str,
     pub btn_browse: &'static str,
+    pub lbl_existing_save: &'static str,
+    pub btn_save_world: &'static str,
 
     // Server params
     pub lbl_name: &'static str,
@@ -126,7 +129,21 @@ pub struct Strings {
     pub lbl_public: &'static str,
     pub lbl_save_interval: &'static str,
     pub lbl_backups: &'static str,
+    pub chk_auto_pause: &'static str,
+    pub lbl_simulation_state: &'static str,
+    pub simulation_running: &'static str,
+    pub simulation_paused_empty: &'static str,
+    pub simulation_empty_unpaused: &'static str,
+    pub simulation_stopped: &'static str,
     pub lbl_dlc: &'static str,
+    pub group_mods: &'static str,
+    pub lbl_mod_dir: &'static str,
+    pub lbl_detected_mods: &'static str,
+    pub lbl_enabled_mods: &'static str,
+    pub lbl_mod_portal_name: &'static str,
+    pub btn_add_mod_zip: &'static str,
+    pub btn_add_mod_portal: &'static str,
+    pub btn_open_mod_dir: &'static str,
 
     // World modifiers
     pub lbl_preset: &'static str,
@@ -184,6 +201,8 @@ pub struct Strings {
     // Manager params
     pub lbl_graceful_stop: &'static str,
     pub chk_auto_backup: &'static str,
+    pub chk_stop_when_empty: &'static str,
+    pub lbl_empty_stop_delay: &'static str,
 
     // Status names
     pub status_stopped: &'static str,
@@ -223,6 +242,7 @@ pub const JA: Strings = Strings {
 
     group_setup: "セットアップ",
     group_paths: "パス",
+    group_saves: "セーブデータ",
     group_server: "サーバー",
     group_manager: "マネージャー",
     group_status: "サーバー状態",
@@ -261,7 +281,7 @@ pub const JA: Strings = Strings {
     lbl_public_address: "公開アドレス:",
     public_address_hint: "他のプレイヤーが接続に使用するアドレスです。playit.gg トンネル、Tailscale 名、グローバル IP など自由に入力できます。Enter で保存、「コピー」で共有用にクリップボードへ。",
     btn_copy: "コピー",
-    btn_tailscale: "Tailscale",
+    btn_tailscale: "Tailscale名",
     copy_success: "クリップボードにコピーしました",
     copy_failed: "コピーに失敗しました",
     save_success: "保存しました",
@@ -281,6 +301,8 @@ pub const JA: Strings = Strings {
     lbl_backup_dir: "バックアップフォルダ:",
     lbl_log_file: "ログファイル:",
     btn_browse: "参照…",
+    lbl_existing_save: "既存セーブ:",
+    btn_save_world: "このセーブで保存",
 
     lbl_name: "サーバー名:",
     lbl_world: "ワールド名:",
@@ -289,7 +311,21 @@ pub const JA: Strings = Strings {
     lbl_public: "公開 (0 / 1):",
     lbl_save_interval: "セーブ間隔 (秒):",
     lbl_backups: "バックアップ保持数:",
+    chk_auto_pause: "誰もいないときワールドを一時停止",
+    lbl_simulation_state: "ワールド進行:",
+    simulation_running: "プレイヤー接続中: ワールド進行中",
+    simulation_paused_empty: "0人: 公式 auto_pause で一時停止対象",
+    simulation_empty_unpaused: "0人: ワールドは進行します",
+    simulation_stopped: "サーバー停止中",
     lbl_dlc: "DLC:",
+    group_mods: "Mod",
+    lbl_mod_dir: "Modフォルダ:",
+    lbl_detected_mods: "検出されたmod:",
+    lbl_enabled_mods: "有効にするmod名:",
+    lbl_mod_portal_name: "Mod Portal名:",
+    btn_add_mod_zip: "mod zipを追加",
+    btn_add_mod_portal: "Mod Portalから追加",
+    btn_open_mod_dir: "Modフォルダを開く",
 
     lbl_preset: "プリセット",
     lbl_combat: "戦闘",
@@ -351,6 +387,8 @@ pub const JA: Strings = Strings {
 
     lbl_graceful_stop: "正常停止タイムアウト (秒):",
     chk_auto_backup: "更新前に自動バックアップ",
+    chk_stop_when_empty: "プレイヤーがいなくなったらサーバーを停止",
+    lbl_empty_stop_delay: "無人停止までの待ち時間 (秒):",
 
     status_stopped: "停止中",
     status_starting: "起動中",
@@ -388,6 +426,7 @@ pub const EN: Strings = Strings {
 
     group_setup: "Setup",
     group_paths: "Paths",
+    group_saves: "Saves",
     group_server: "Server",
     group_manager: "Manager",
     group_status: "Server status",
@@ -426,7 +465,7 @@ pub const EN: Strings = Strings {
     lbl_public_address: "Public address:",
     public_address_hint: "Address other players use to connect — a playit.gg tunnel, Tailscale name, public IP, etc. Press Enter to save, Copy to put it on the clipboard.",
     btn_copy: "Copy",
-    btn_tailscale: "Tailscale",
+    btn_tailscale: "Tailscale name",
     copy_success: "Copied to clipboard",
     copy_failed: "Copy failed",
     save_success: "Saved",
@@ -446,6 +485,8 @@ pub const EN: Strings = Strings {
     lbl_backup_dir: "Backup dir:",
     lbl_log_file: "Log file:",
     btn_browse: "Browse...",
+    lbl_existing_save: "Existing save:",
+    btn_save_world: "Save this world",
 
     lbl_name: "Name:",
     lbl_world: "World:",
@@ -454,7 +495,21 @@ pub const EN: Strings = Strings {
     lbl_public: "Public (0 or 1):",
     lbl_save_interval: "Save interval (sec):",
     lbl_backups: "Backups kept:",
+    chk_auto_pause: "Pause world when nobody is connected",
+    lbl_simulation_state: "World simulation:",
+    simulation_running: "Players connected: world is running",
+    simulation_paused_empty: "0 players: official auto_pause should pause the world",
+    simulation_empty_unpaused: "0 players: world keeps running",
+    simulation_stopped: "Server stopped",
     lbl_dlc: "DLC:",
+    group_mods: "Mods",
+    lbl_mod_dir: "Mod dir:",
+    lbl_detected_mods: "Detected mods:",
+    lbl_enabled_mods: "Enabled mod names:",
+    lbl_mod_portal_name: "Mod Portal name:",
+    btn_add_mod_zip: "Add mod zip",
+    btn_add_mod_portal: "Add from Mod Portal",
+    btn_open_mod_dir: "Open mod folder",
 
     lbl_preset: "Preset",
     lbl_combat: "Combat",
@@ -516,6 +571,8 @@ pub const EN: Strings = Strings {
 
     lbl_graceful_stop: "Graceful stop timeout (sec):",
     chk_auto_backup: "Auto-backup before update",
+    chk_stop_when_empty: "Stop server when no players remain",
+    lbl_empty_stop_delay: "Empty stop delay (sec):",
 
     status_stopped: "Stopped",
     status_starting: "Starting",

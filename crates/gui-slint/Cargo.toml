@@ -25,6 +25,8 @@ anyhow.workspace = true
 chrono.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+ureq.workspace = true
+serde_json = "1"
 rfd = "0.14"
 # Clipboard for the "公開アドレスをコピー" button. Small, Win32-native.
 arboard = "3"

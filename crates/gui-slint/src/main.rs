@@ -27,9 +27,11 @@ struct UiState {
     /// Last status observed; used to re-translate the status label when the
     /// user toggles language outside of a status change.
     last_status: ServerStatus,
-    /// Currently-connected players, keyed by SteamID. The value is when we
+    /// Currently-connected players, keyed by player name. The value is when we
     /// observed the PlayerJoined event.
-    players: HashMap<u64, chrono::DateTime<chrono::Local>>,
+    players: HashMap<String, chrono::DateTime<chrono::Local>>,
+    /// Prevent auto-stop from acting on an incomplete roster after GUI restart.
+    player_roster_observed: bool,
     /// Last refresh from `list_backups`. Cached so we can rebuild row models
     /// after toggling sort / selection without going back to disk.
     last_backups: Vec<Backup>,
@@ -78,6 +80,7 @@ fn main() -> anyhow::Result<()> {
         language: initial_language,
         last_status: ServerStatus::Stopped,
         players: HashMap::new(),
+        player_roster_observed: false,
         last_backups: Vec::new(),
         selected_backup_ids: HashSet::new(),
         backup_sort_column: 0,
@@ -96,6 +99,7 @@ fn main() -> anyhow::Result<()> {
             .as_ref()
             .unwrap_or(&default_config_for_setup()),
     );
+    refresh_save_worlds(&ui);
 
     let server: Option<Arc<FactorioServer>> = match initial_config.as_ref() {
         Some(cfg) => {
@@ -104,6 +108,7 @@ fn main() -> anyhow::Result<()> {
             ui.set_paths_summary(translations::render_paths_summary(cfg, t).into());
             ui.set_params_summary(translations::render_params_summary(cfg, t).into());
             update_install_state(&ui, cfg, t);
+            ui.set_simulation_state_text(t.simulation_stopped.into());
             ui.set_server_controls_enabled(true);
             ui.set_public_address(cfg.manager.public_address.clone().into());
             // Populate BackupWindow's context strip (world / paths display).
@@ -128,6 +133,7 @@ fn main() -> anyhow::Result<()> {
                 .into(),
             );
             ui.set_server_controls_enabled(false);
+            ui.set_simulation_state_text(t.simulation_stopped.into());
             None
         }
     };
@@ -166,6 +172,8 @@ fn main() -> anyhow::Result<()> {
     }
 
     wire_browse_and_save(&ui, server.clone(), state.clone(), manager_dir.clone());
+    wire_save_world_callbacks(&ui);
+    wire_mod_callbacks(&ui);
     wire_language_callback(
         &ui,
         &backup_window,
@@ -279,6 +287,7 @@ fn apply_strings(ui: &MainWindow, t: &Strings) {
 
     ui.set_t_group_setup(t.group_setup.into());
     ui.set_t_group_paths(t.group_paths.into());
+    ui.set_t_group_saves(t.group_saves.into());
     ui.set_t_group_server(t.group_server.into());
     ui.set_t_group_manager(t.group_manager.into());
     ui.set_t_group_status(t.group_status.into());
@@ -303,6 +312,8 @@ fn apply_strings(ui: &MainWindow, t: &Strings) {
     ui.set_t_lbl_backup_dir(t.lbl_backup_dir.into());
     ui.set_t_lbl_log_file(t.lbl_log_file.into());
     ui.set_t_btn_browse(t.btn_browse.into());
+    ui.set_t_lbl_existing_save(t.lbl_existing_save.into());
+    ui.set_t_btn_save_world(t.btn_save_world.into());
 
     ui.set_t_lbl_name(t.lbl_name.into());
     ui.set_t_lbl_world(t.lbl_world.into());
@@ -311,10 +322,22 @@ fn apply_strings(ui: &MainWindow, t: &Strings) {
     ui.set_t_lbl_public(t.lbl_public.into());
     ui.set_t_lbl_save_interval(t.lbl_save_interval.into());
     ui.set_t_lbl_backups(t.lbl_backups.into());
+    ui.set_t_chk_auto_pause(t.chk_auto_pause.into());
+    ui.set_t_lbl_simulation_state(t.lbl_simulation_state.into());
     ui.set_t_lbl_dlc(t.lbl_dlc.into());
+    ui.set_t_group_mods(t.group_mods.into());
+    ui.set_t_lbl_mod_dir(t.lbl_mod_dir.into());
+    ui.set_t_lbl_detected_mods(t.lbl_detected_mods.into());
+    ui.set_t_lbl_enabled_mods(t.lbl_enabled_mods.into());
+    ui.set_t_lbl_mod_portal_name(t.lbl_mod_portal_name.into());
+    ui.set_t_btn_add_mod_zip(t.btn_add_mod_zip.into());
+    ui.set_t_btn_add_mod_portal(t.btn_add_mod_portal.into());
+    ui.set_t_btn_open_mod_dir(t.btn_open_mod_dir.into());
 
     ui.set_t_lbl_graceful_stop(t.lbl_graceful_stop.into());
     ui.set_t_chk_auto_backup(t.chk_auto_backup.into());
+    ui.set_t_chk_stop_when_empty(t.chk_stop_when_empty.into());
+    ui.set_t_lbl_empty_stop_delay(t.lbl_empty_stop_delay.into());
 
     ui.set_t_group_players(t.group_players.into());
     ui.set_t_group_backup(t.group_backup.into());
@@ -369,10 +392,23 @@ fn populate_settings_fields(ui: &MainWindow, cfg: &AppConfig) {
     ui.set_server_public(cfg.server.public.to_string().into());
     ui.set_save_interval(cfg.server.save_interval.to_string().into());
     ui.set_backup_count(cfg.server.backups.to_string().into());
+    ui.set_auto_pause(cfg.server.auto_pause);
     ui.set_dlc_index(dlc_index(cfg.server.dlc));
+    ui.set_mod_dir(
+        cfg.paths
+            .server_dir
+            .join("mods")
+            .display()
+            .to_string()
+            .into(),
+    );
+    ui.set_enabled_mods_text(cfg.server.enabled_mods.join("\n").into());
+    refresh_detected_mods(ui);
 
     ui.set_graceful_stop_timeout_secs(cfg.manager.graceful_stop_timeout_secs.to_string().into());
     ui.set_auto_backup_before_update(cfg.manager.auto_backup_before_update);
+    ui.set_stop_when_empty(cfg.manager.stop_when_empty);
+    ui.set_empty_stop_delay_secs(cfg.manager.empty_stop_delay_secs.to_string().into());
 
     ui.set_error_text("".into());
 }
@@ -401,6 +437,8 @@ fn build_config_from_ui(ui: &MainWindow, language: Language) -> Result<AppConfig
             public: parse_u::<u8>(&ui.get_server_public(), "public")?,
             save_interval: parse_u::<u32>(&ui.get_save_interval(), "save_interval")?,
             backups: parse_u::<u32>(&ui.get_backup_count(), "backup_count")?,
+            auto_pause: ui.get_auto_pause(),
+            enabled_mods: parse_enabled_mods(&ui.get_enabled_mods_text()),
             crossplay: false,
             dlc: dlc_from_index(ui.get_dlc_index()),
         },
@@ -410,6 +448,11 @@ fn build_config_from_ui(ui: &MainWindow, language: Language) -> Result<AppConfig
                 "graceful_stop_timeout_secs",
             )?,
             auto_backup_before_update: ui.get_auto_backup_before_update(),
+            stop_when_empty: ui.get_stop_when_empty(),
+            empty_stop_delay_secs: parse_u::<u32>(
+                &ui.get_empty_stop_delay_secs(),
+                "empty_stop_delay_secs",
+            )?,
             language,
             public_address: ui.get_public_address().to_string(),
             steam_username: ui.get_steam_username().trim().to_string(),
@@ -480,6 +523,11 @@ fn wire_server_callbacks(ui: &MainWindow, server: Arc<FactorioServer>) {
             tokio::spawn(async move {
                 if let Err(e) = server.stop(true).await {
                     set_status_text(&weak, format!("stop failed: {e:#}"));
+                    return;
+                }
+                match server.backup_with_kind(BackupKind::Manual).await {
+                    Ok(_) => set_status_text(&weak, "stopped and backed up".to_string()),
+                    Err(e) => set_status_text(&weak, format!("stopped; backup failed: {e:#}")),
                 }
             });
         });
@@ -518,7 +566,7 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
         loop {
             match rx.recv().await {
                 Ok(ev) => {
-                    let (status_text, flags, language, players_update) = {
+                    let (status_text, flags, language, players_update, empty_stop_delay) = {
                         let mut guard = state.lock().expect("state mutex poisoned");
                         if let ServerEvent::StatusChanged(s) = &ev {
                             guard.last_status = *s;
@@ -526,16 +574,18 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
                             // from Running so we don't leave ghost rows.
                             if !matches!(*s, ServerStatus::Running) {
                                 guard.players.clear();
+                                guard.player_roster_observed = false;
                             }
                         }
                         let mut roster_changed = false;
                         match &ev {
-                            ServerEvent::PlayerJoined { steam_id } => {
-                                guard.players.insert(*steam_id, chrono::Local::now());
+                            ServerEvent::PlayerJoined { name } => {
+                                guard.players.insert(name.clone(), chrono::Local::now());
+                                guard.player_roster_observed = true;
                                 roster_changed = true;
                             }
-                            ServerEvent::PlayerLeft { steam_id } => {
-                                guard.players.remove(steam_id);
+                            ServerEvent::PlayerLeft { name } => {
+                                guard.players.remove(name);
                                 roster_changed = true;
                             }
                             ServerEvent::StatusChanged(_) => {
@@ -553,12 +603,21 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
                             _ => (None, None),
                         };
                         let players_update = if roster_changed {
-                            Some(build_player_data(&guard.players, t))
+                            Some(build_player_data(
+                                &guard.players,
+                                guard.last_status,
+                                config_auto_pause(&guard.config),
+                                t,
+                            ))
                         } else {
                             None
                         };
-                        (st, flags, lang, players_update)
+                        let empty_stop_delay = empty_stop_delay_after_event(&guard, &ev);
+                        (st, flags, lang, players_update, empty_stop_delay)
                     };
+                    if let Some(delay) = empty_stop_delay {
+                        schedule_empty_stop(server.clone(), state.clone(), weak.clone(), delay);
+                    }
                     let log_line = log_line_from(&ev, translations::for_language(language));
                     let weak = weak.clone();
                     let _ = weak.upgrade_in_event_loop(move |ui| {
@@ -569,8 +628,8 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
                             ui.set_busy(busy);
                             ui.set_server_running(server_running);
                         }
-                        if let Some((rows, count_text)) = players_update {
-                            install_player_model(&ui, rows, count_text);
+                        if let Some((rows, count_text, simulation_text)) = players_update {
+                            install_player_model(&ui, rows, count_text, simulation_text);
                         }
                         if let Some(line) = log_line {
                             let mut buf = ui.get_log_text().to_string();
@@ -601,27 +660,365 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
 /// Materialize the player roster into Send-safe data. The caller wraps the
 /// Vec in a Slint VecModel/ModelRc inside the UI thread (Rc is !Send).
 fn build_player_data(
-    players: &HashMap<u64, chrono::DateTime<chrono::Local>>,
+    players: &HashMap<String, chrono::DateTime<chrono::Local>>,
+    status: ServerStatus,
+    auto_pause: bool,
     t: &Strings,
-) -> (Vec<PlayerRow>, String) {
-    let mut entries: Vec<(u64, chrono::DateTime<chrono::Local>)> =
-        players.iter().map(|(k, v)| (*k, *v)).collect();
+) -> (Vec<PlayerRow>, String, String) {
+    let mut entries: Vec<(String, chrono::DateTime<chrono::Local>)> =
+        players.iter().map(|(k, v)| (k.clone(), *v)).collect();
     entries.sort_by_key(|entry| entry.1);
     let rows: Vec<PlayerRow> = entries
         .into_iter()
-        .map(|(steam_id, at)| PlayerRow {
-            steam_id: format!("steam:{steam_id}").into(),
+        .map(|(name, at)| PlayerRow {
+            player_name: name.into(),
             joined_at: at.format("%H:%M:%S").to_string().into(),
         })
         .collect();
     let count_text = translations::fmt_count(t.players_count_fmt, players.len());
-    (rows, count_text)
+    let simulation_text = simulation_state_text(status, players.len(), auto_pause, t).to_string();
+    (rows, count_text, simulation_text)
 }
 
-fn install_player_model(ui: &MainWindow, rows: Vec<PlayerRow>, count_text: String) {
+fn install_player_model(
+    ui: &MainWindow,
+    rows: Vec<PlayerRow>,
+    count_text: String,
+    simulation_text: String,
+) {
     let model = std::rc::Rc::new(slint::VecModel::from(rows));
     ui.set_player_rows(slint::ModelRc::from(model));
     ui.set_players_count_text(count_text.into());
+    ui.set_simulation_state_text(simulation_text.into());
+}
+
+fn config_auto_pause(config: &Option<AppConfig>) -> bool {
+    config
+        .as_ref()
+        .map(|cfg| cfg.server.auto_pause)
+        .unwrap_or(true)
+}
+
+fn simulation_state_text(
+    status: ServerStatus,
+    player_count: usize,
+    auto_pause: bool,
+    t: &Strings,
+) -> &'static str {
+    if !matches!(status, ServerStatus::Running) {
+        return t.simulation_stopped;
+    }
+    if player_count > 0 {
+        return t.simulation_running;
+    }
+    if auto_pause {
+        t.simulation_paused_empty
+    } else {
+        t.simulation_empty_unpaused
+    }
+}
+
+fn empty_stop_delay_after_event(state: &UiState, ev: &ServerEvent) -> Option<u32> {
+    if !matches!(ev, ServerEvent::PlayerLeft { .. }) {
+        return None;
+    }
+    let cfg = state.config.as_ref()?;
+    if !cfg.manager.stop_when_empty || !state.player_roster_observed {
+        return None;
+    }
+    if state.last_status == ServerStatus::Running && state.players.is_empty() {
+        Some(cfg.manager.empty_stop_delay_secs)
+    } else {
+        None
+    }
+}
+
+fn schedule_empty_stop(
+    server: Arc<FactorioServer>,
+    state: Arc<Mutex<UiState>>,
+    weak: slint::Weak<MainWindow>,
+    delay_secs: u32,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(delay_secs as u64)).await;
+        if !should_stop_for_empty_server(&state) {
+            return;
+        }
+        set_status_text(
+            &weak,
+            "no players online; stopping server safely...".to_string(),
+        );
+        if let Err(e) = server.stop(true).await {
+            set_status_text(&weak, format!("empty stop failed: {e:#}"));
+            return;
+        }
+        match server.backup_with_kind(BackupKind::Manual).await {
+            Ok(_) => set_status_text(
+                &weak,
+                "stopped and backed up after players left".to_string(),
+            ),
+            Err(e) => set_status_text(&weak, format!("stopped; backup failed: {e:#}")),
+        }
+    });
+}
+
+fn should_stop_for_empty_server(state: &Arc<Mutex<UiState>>) -> bool {
+    let guard = state.lock().expect("state mutex poisoned");
+    let Some(cfg) = guard.config.as_ref() else {
+        return false;
+    };
+    cfg.manager.stop_when_empty
+        && guard.player_roster_observed
+        && guard.players.is_empty()
+        && guard.last_status == ServerStatus::Running
+}
+
+fn list_save_worlds(save_dir: &Path) -> Vec<slint::SharedString> {
+    let mut worlds = Vec::new();
+    let Ok(entries) = std::fs::read_dir(save_dir) else {
+        return worlds;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_zip = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"));
+        if !is_zip {
+            continue;
+        }
+        if let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) {
+            worlds.push(slint::SharedString::from(stem));
+        }
+    }
+
+    worlds.sort_by_key(|world| world.to_string().to_ascii_lowercase());
+    worlds
+}
+
+fn refresh_save_worlds(ui: &MainWindow) {
+    let save_dir = PathBuf::from(ui.get_save_dir().as_str());
+    let worlds = list_save_worlds(&save_dir);
+    let model = std::rc::Rc::new(slint::VecModel::from(worlds));
+    ui.set_save_worlds(slint::ModelRc::from(model));
+}
+
+fn wire_save_world_callbacks(ui: &MainWindow) {
+    let ui_weak = ui.as_weak();
+    ui.on_refresh_saves_clicked(move || {
+        if let Some(ui) = ui_weak.upgrade() {
+            refresh_save_worlds(&ui);
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_use_save_world(move |world| {
+        if let Some(ui) = ui_weak.upgrade() {
+            let world = world.trim();
+            if !world.is_empty() {
+                ui.set_world_name(world.into());
+            }
+        }
+    });
+}
+
+fn parse_enabled_mods(text: &str) -> Vec<String> {
+    text.lines()
+        .flat_map(|line| line.split(','))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn detected_mod_names(mod_dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(mod_dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| mod_name_from_zip(&entry.path()))
+        .collect();
+    names.sort_by_key(|name| name.to_ascii_lowercase());
+    names.dedup();
+    names
+}
+
+fn mod_name_from_zip(path: &Path) -> Option<String> {
+    let is_zip = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"));
+    if !is_zip {
+        return None;
+    }
+    let stem = path.file_stem()?.to_string_lossy();
+    Some(
+        stem.rsplit_once('_')
+            .map(|(name, _version)| name)
+            .unwrap_or(&stem)
+            .to_string(),
+    )
+}
+
+fn refresh_detected_mods(ui: &MainWindow) {
+    let names = detected_mod_names(Path::new(ui.get_mod_dir().as_str()));
+    let text = if names.is_empty() {
+        "(なし)".to_string()
+    } else {
+        names.join("\n")
+    };
+    ui.set_detected_mods_text(text.into());
+}
+
+fn add_enabled_mod_name(ui: &MainWindow, name: &str) {
+    let mut names = parse_enabled_mods(&ui.get_enabled_mods_text());
+    if names.iter().all(|existing| existing != name) {
+        names.push(name.to_string());
+        ui.set_enabled_mods_text(names.join("\n").into());
+    }
+}
+
+fn pick_mod_zip() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter("Factorio mod zip", &["zip"])
+        .pick_file()
+}
+
+fn install_mod_zip(ui: &MainWindow, source: &Path) -> anyhow::Result<Option<String>> {
+    let mod_dir = PathBuf::from(ui.get_mod_dir().as_str());
+    std::fs::create_dir_all(&mod_dir).with_context(|| format!("create {}", mod_dir.display()))?;
+    let file_name = source
+        .file_name()
+        .context("selected mod zip has no file name")?;
+    let target = mod_dir.join(file_name);
+    std::fs::copy(source, &target)
+        .with_context(|| format!("copy {} -> {}", source.display(), target.display()))?;
+    Ok(mod_name_from_zip(&target))
+}
+
+fn install_mod_from_portal(mod_name: &str, mod_dir: &Path) -> anyhow::Result<String> {
+    let mod_name = mod_name.trim();
+    anyhow::ensure!(!mod_name.is_empty(), "mod name is empty");
+    let (username, token) = factorio_service_credentials(mod_dir)?;
+    let url = format!("https://mods.factorio.com/api/mods/{mod_name}/full");
+    let details_text = ureq::get(&url).call()?.into_string()?;
+    let details: serde_json::Value = serde_json::from_str(&details_text)?;
+    let release = details["releases"]
+        .as_array()
+        .and_then(|releases| releases.last())
+        .context("mod has no releases")?;
+    let file_name = release["file_name"]
+        .as_str()
+        .context("release has no file_name")?;
+    let download_url = release["download_url"]
+        .as_str()
+        .context("release has no download_url")?;
+
+    std::fs::create_dir_all(mod_dir).with_context(|| format!("create {}", mod_dir.display()))?;
+    let target = mod_dir.join(file_name);
+    let download =
+        format!("https://mods.factorio.com{download_url}?username={username}&token={token}");
+    let mut response = ureq::get(&download).call()?.into_reader();
+    let mut file =
+        std::fs::File::create(&target).with_context(|| format!("create {}", target.display()))?;
+    std::io::copy(&mut response, &mut file)
+        .with_context(|| format!("download mod to {}", target.display()))?;
+
+    mod_name_from_zip(&target).context("downloaded file name did not look like a mod zip")
+}
+
+fn factorio_service_credentials(mod_dir: &Path) -> anyhow::Result<(String, String)> {
+    for path in factorio_player_data_candidates(mod_dir) {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let username = json["service-username"].as_str().unwrap_or("").trim();
+        let token = json["service-token"].as_str().unwrap_or("").trim();
+        if !username.is_empty() && !token.is_empty() {
+            return Ok((username.to_string(), token.to_string()));
+        }
+    }
+    anyhow::bail!("Factorio service token not found; open Factorio and log in to Mod Portal first");
+}
+
+fn factorio_player_data_candidates(mod_dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(server_dir) = mod_dir.parent() {
+        out.push(server_dir.join("UserData").join("player-data.json"));
+    }
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        out.push(
+            PathBuf::from(appdata)
+                .join("Factorio")
+                .join("player-data.json"),
+        );
+    }
+    out
+}
+
+fn wire_mod_callbacks(ui: &MainWindow) {
+    let ui_weak = ui.as_weak();
+    ui.on_refresh_mods_clicked(move || {
+        if let Some(ui) = ui_weak.upgrade() {
+            refresh_detected_mods(&ui);
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_open_mod_dir_clicked(move || {
+        let Some(ui) = ui_weak.upgrade() else { return };
+        let dir = ui.get_mod_dir().to_string();
+        let _ = std::fs::create_dir_all(&dir);
+        if let Err(e) = std::process::Command::new("explorer").arg(&dir).spawn() {
+            ui.set_error_text(format!("failed to open mod dir: {e}").into());
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_add_mod_zip_clicked(move || {
+        let Some(ui) = ui_weak.upgrade() else { return };
+        let Some(source) = pick_mod_zip() else { return };
+        match install_mod_zip(&ui, &source) {
+            Ok(Some(name)) => {
+                add_enabled_mod_name(&ui, &name);
+                refresh_detected_mods(&ui);
+                ui.set_error_text(format!("mod zip added: {name}").into());
+            }
+            Ok(None) => {
+                refresh_detected_mods(&ui);
+                ui.set_error_text("mod zip added".into());
+            }
+            Err(e) => ui.set_error_text(format!("failed to add mod zip: {e:#}").into()),
+        }
+    });
+
+    let ui_weak = ui.as_weak();
+    ui.on_add_mod_portal_clicked(move || {
+        let Some(ui) = ui_weak.upgrade() else { return };
+        let mod_name = ui.get_mod_portal_name().to_string();
+        let mod_dir = PathBuf::from(ui.get_mod_dir().as_str());
+        let weak = ui.as_weak();
+        ui.set_error_text(format!("downloading mod: {}", mod_name.trim()).into());
+        tokio::spawn(async move {
+            let result =
+                tokio::task::spawn_blocking(move || install_mod_from_portal(&mod_name, &mod_dir))
+                    .await
+                    .unwrap_or_else(|e| Err(anyhow::anyhow!("download task failed: {e}")));
+            let _ = weak.upgrade_in_event_loop(move |ui| match result {
+                Ok(name) => {
+                    add_enabled_mod_name(&ui, &name);
+                    refresh_detected_mods(&ui);
+                    ui.set_error_text(format!("mod downloaded: {name}").into());
+                }
+                Err(e) => ui.set_error_text(format!("failed to download mod: {e:#}").into()),
+            });
+        });
+    });
 }
 
 /// Sort `last_backups` in place using the column/direction held in state.
@@ -942,11 +1339,11 @@ fn wire_tailscale_address(ui: &MainWindow, state: Arc<Mutex<UiState>>, manager_d
         let Some(ui) = ui_weak.upgrade() else { return };
         let (language, port) = current_language_and_port(&state);
         let t = translations::for_language(language);
-        let Some(ip) = detect_tailscale_ipv4() else {
-            set_public_address_status_briefly(&ui, "Tailscale IPv4 not found");
+        let Some(host) = detect_tailscale_host() else {
+            set_public_address_status_briefly(&ui, "Tailscale address not found");
             return;
         };
-        let address = format!("{ip}:{port}");
+        let address = format!("{host}:{port}");
         persist_public_address(&state, &manager_dir, &address);
         ui.set_public_address(address.into());
         set_public_address_status_briefly(&ui, t.save_success);
@@ -1013,6 +1410,49 @@ fn persist_public_address(state: &Arc<Mutex<UiState>>, manager_dir: &Path, addre
 
 fn detect_tailscale_ipv4() -> Option<String> {
     detect_tailscale_ipv4_from_cli().or_else(detect_tailscale_ipv4_from_adapter)
+}
+
+fn detect_tailscale_host() -> Option<String> {
+    detect_tailscale_dns_name()
+        .or_else(detect_tailscale_ipv4)
+        .map(|host| host.trim_end_matches('.').to_string())
+}
+
+fn detect_tailscale_dns_name() -> Option<String> {
+    let output = std::process::Command::new("tailscale")
+        .args(["status", "--json"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    find_json_string_value(&stdout, "DNSName").filter(|name| !name.is_empty())
+}
+
+fn find_json_string_value(json: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let after_key = json.split_once(&needle)?.1;
+    let after_colon = after_key.split_once(':')?.1.trim_start();
+    if !after_colon.starts_with('"') {
+        return None;
+    }
+
+    let mut value = String::new();
+    let mut escaped = false;
+    for ch in after_colon[1..].chars() {
+        if escaped {
+            value.push(ch);
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            return Some(value);
+        } else {
+            value.push(ch);
+        }
+    }
+    None
 }
 
 fn detect_tailscale_ipv4_from_cli() -> Option<String> {
@@ -1164,8 +1604,16 @@ fn wire_browse_and_save(
                 let s = picked.to_string_lossy().to_string();
                 match key.as_str() {
                     "steamcmd" => ui.set_steamcmd_path(s.into()),
-                    "server_dir" => ui.set_server_dir(s.into()),
-                    "save_dir" => ui.set_save_dir(s.into()),
+                    "server_dir" => {
+                        let mod_dir = PathBuf::from(&s).join("mods").display().to_string();
+                        ui.set_server_dir(s.into());
+                        ui.set_mod_dir(mod_dir.into());
+                        refresh_detected_mods(&ui);
+                    }
+                    "save_dir" => {
+                        ui.set_save_dir(s.into());
+                        refresh_save_worlds(&ui);
+                    }
                     "backup_dir" => ui.set_backup_dir(s.into()),
                     "log_file" => ui.set_log_file(s.into()),
                     _ => {}
@@ -1292,13 +1740,7 @@ fn wire_language_callback(
             }
         }
 
-        // Re-render the player roster so its count label uses the new
-        // locale (the row data itself stays the same).
-        {
-            let guard = state.lock().expect("state mutex poisoned");
-            let (rows, count_text) = build_player_data(&guard.players, t);
-            install_player_model(&ui, rows, count_text);
-        }
+        rerender_players_for_language(&ui, &state, t);
         // Same for backups, but the data needs a re-list to be safe.
         if let Some(s) = server.as_ref() {
             let server = s.clone();
@@ -1319,6 +1761,17 @@ fn wire_language_callback(
             state.lock().expect("state mutex poisoned").config = Some(cfg);
         }
     });
+}
+
+fn rerender_players_for_language(ui: &MainWindow, state: &Arc<Mutex<UiState>>, t: &Strings) {
+    let guard = state.lock().expect("state mutex poisoned");
+    let (rows, count_text, simulation_text) = build_player_data(
+        &guard.players,
+        guard.last_status,
+        config_auto_pause(&guard.config),
+        t,
+    );
+    install_player_model(ui, rows, count_text, simulation_text);
 }
 
 fn pick_for_key(key: &str, current: &str) -> Option<PathBuf> {
@@ -1376,8 +1829,8 @@ fn log_line_from(ev: &ServerEvent, t: &Strings) -> Option<String> {
         ServerEvent::WorldSaved { at } => {
             Some(format!("[saved] {}", at.format("%Y-%m-%d %H:%M:%S")))
         }
-        ServerEvent::PlayerJoined { steam_id } => Some(format!("[+] steam:{steam_id}")),
-        ServerEvent::PlayerLeft { steam_id } => Some(format!("[-] steam:{steam_id}")),
+        ServerEvent::PlayerJoined { name } => Some(format!("[+] {name}")),
+        ServerEvent::PlayerLeft { name } => Some(format!("[-] {name}")),
         ServerEvent::ServerReady => Some("[ready] accepting connections".into()),
         ServerEvent::Warning(s) => Some(format!("[warning] {s}")),
         ServerEvent::StatusChanged(s) => {
@@ -1437,5 +1890,14 @@ mod tests {
         assert!(is_tailscale_ipv4("100.64.0.1"));
         assert!(!is_tailscale_ipv4("192.168.1.10"));
         assert!(!is_tailscale_ipv4("100.not.an.ip"));
+    }
+
+    #[test]
+    fn parses_tailscale_dns_name_from_status_json() {
+        let json = r#"{"Self":{"DNSName":"server.example.ts.net."}}"#;
+        assert_eq!(
+            find_json_string_value(json, "DNSName").as_deref(),
+            Some("server.example.ts.net.")
+        );
     }
 }

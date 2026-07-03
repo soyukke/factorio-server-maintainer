@@ -7,9 +7,11 @@ Windows で Factorio 専用サーバーを 1 台管理するための GUI ツー
 - SteamCMD で Factorio をインストール / 更新 (`app_update 427520`)
 - `bin\x64\factorio.exe` を `--start-server` 付きで起動
 - セーブ zip が無ければ `<save_dir>\<world>.zip` を自動作成
+- GUI で既存セーブを選択、または新しいワールド名へ切り替え
 - `ctrlc-helper.exe` でまず正常停止し、タイムアウト後だけ強制終了
 - セーブ zip をコピーしてスナップショット作成、削除、ロールバック
 - Base / Space Age を `mods\mod-list.json` で明示管理
+- 公式 `auto_pause` で、誰もいないときのワールド進行を停止
 - GUI から共有用の公開アドレスを保存・コピー
 
 ## 既定の配置
@@ -72,6 +74,44 @@ password: factorio
 just run
 ```
 
+## セーブデータの切り替え
+
+GUI の「セーブデータ」欄で、保存フォルダ内の `*.zip` を一覧から選べます。
+
+既存セーブで遊びたい場合:
+
+1. サーバーを停止する
+2. 「既存セーブ」から遊びたいセーブを選ぶ
+3. 「このセーブで保存」を押す
+4. アプリが再起動したら「サーバー起動」を押す
+
+新しいワールドで始めたい場合:
+
+1. サーバーを停止する
+2. 「ワールド名」に新しい名前を入力する
+3. 「このセーブで保存」を押す
+4. アプリが再起動したら「サーバー起動」を押す
+
+新しいワールド名の zip がまだ無い場合、起動時に `<save_dir>\<world>.zip` を自動作成します。古いセーブ zip は削除しないので、後から一覧で選び直せます。
+
+バックアップから戻したい場合は「バックアップ管理を開く…」から対象のスナップショットを選んでロールバックします。ロールバック前の現在状態は自動で退避されます。
+
+## 無人時のワールド進行
+
+Factorio には公式の `auto_pause` 設定があります。このツールでは既定で ON です。
+
+```json
+"auto_pause": true
+```
+
+ON の場合、プレイヤーが 0 人になるとサーバープロセスは起動したまま、ワールド時間は一時停止対象になります。工場、汚染、敵襲、資源消費を無人で進めたくない場合は ON のまま使ってください。
+
+この設定はサーバー起動時に `server-settings.json` として渡すため、変更の反映にはサーバー再起動が必要です。GUI の「ワールド進行」欄で、現在プレイヤーがいて進行中か、0 人で一時停止対象かを確認できます。
+
+さらに管理ツール側の「プレイヤーがいなくなったらサーバーを停止」を ON にすると、最後のプレイヤーが抜けてから既定 300 秒後に正常停止します。正常停止では Factorio に保存させてから終了し、その後にバックアップスナップショットを作成します。途中で誰かが戻ってきた場合は停止しません。
+
+Factorio の autosave は管理対象サーバーの `Server\UserData\saves\_autosave*.zip` に作られます。管理ツールはサーバー起動中、この autosave が更新されたらバックアップフォルダへ自動コピーします。つまり `save_interval` は Factorio の autosave 間隔であり、その autosave をバックアップとして集約する形です。
+
 ## DLC モード
 
 `server.dlc` で Factorio の DLC プロファイルを選びます。
@@ -95,6 +135,26 @@ dlc = "space_age"
 - `space-age`
 
 起動時は `--mod-directory <server_dir>\mods` を渡すため、このプロファイルが安定して使われます。
+
+## Mod 管理
+
+GUI の「Mod」欄で、Mod Portal から mod を追加できます。
+
+```text
+%USERPROFILE%\.factorio-server-maintainer\Server\mods
+```
+
+「Mod Portal名」に `respawn-beacon` のような mod 名を入れて「Mod Portalから追加」を押すと、最新リリースをダウンロードしてこのフォルダへコピーします。ダウンロードには Factorio の `player-data.json` にある `service-username` / `service-token` を使います。トークンはこのツールの `config.toml` には保存しません。
+
+zip を手元に持っている場合は「mod zipを追加」から選べます。Factorio の mod zip は通常 `<mod-name>_<version>.zip` なので、コピー後に `<mod-name>` を検出し、「有効にするmod名」に自動追加します。
+
+有効化したい mod は「有効にするmod名」に 1 行ずつ書いて保存します。保存後、次回サーバー起動時に `mod-list.json` へ反映されます。自動追加された名前を消せば、その mod は無効扱いになります。
+
+```text
+respawn-beacon
+```
+
+Gameplay mod はサーバーだけでは完結しません。参加者のクライアントにも同じ mod セットが必要です。Factorio は接続時に mod 同期を促しますが、最終的には参加者側にも mod が入ります。
 
 ## SteamCMD
 

@@ -53,10 +53,10 @@ pub enum ServerEvent {
         at: chrono::DateTime<chrono::Local>,
     },
     PlayerJoined {
-        steam_id: u64,
+        name: String,
     },
     PlayerLeft {
-        steam_id: u64,
+        name: String,
     },
     /// Startup completed; the server is accepting connections.
     ServerReady,

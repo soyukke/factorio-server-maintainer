@@ -31,7 +31,7 @@ struct ModList {
 
 #[derive(Serialize)]
 struct ModEntry {
-    name: &'static str,
+    name: String,
     enabled: bool,
 }
 
@@ -56,12 +56,14 @@ struct RunningInner {
     process: Arc<ServerProcess>,
     tail: JoinHandle<()>,
     pump: JoinHandle<()>,
+    autosave_backup: JoinHandle<()>,
 }
 
 impl RunningInner {
     fn shutdown(self) {
         self.tail.abort();
         self.pump.abort();
+        self.autosave_backup.abort();
     }
 }
 
@@ -132,7 +134,7 @@ impl FactorioServer {
     }
 
     fn write_mod_list(&self) -> anyhow::Result<()> {
-        let list = mod_list_for(self.config.server.dlc);
+        let list = mod_list_for(self.config.server.dlc, &self.config.server.enabled_mods);
         let mod_dir = self.mod_dir();
         std::fs::create_dir_all(&mod_dir)
             .with_context(|| format!("create {}", mod_dir.display()))?;
@@ -156,6 +158,49 @@ impl FactorioServer {
             format!("[path]\nread-data=__PATH__executable__/../../data\nwrite-data={write_data}\n");
         std::fs::write(&config_path, config)
             .with_context(|| format!("write {}", config_path.display()))?;
+        Ok(())
+    }
+
+    fn write_server_settings(&self) -> anyhow::Result<()> {
+        let settings_path = self.server_settings_path();
+        if let Some(parent) = settings_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+        }
+        let autosave_interval = (self.config.server.save_interval / 60).max(1);
+        let settings = serde_json::json!({
+            "name": self.config.server.name,
+            "description": "Managed by Factorio Server Maintainer",
+            "tags": ["managed"],
+            "max_players": 0,
+            "visibility": {
+                "public": self.config.server.public != 0,
+                "lan": false
+            },
+            "username": "",
+            "password": "",
+            "token": "",
+            "game_password": self.config.server.password,
+            "require_user_verification": true,
+            "max_upload_in_kilobytes_per_second": 0,
+            "max_upload_slots": 5,
+            "minimum_latency_in_ticks": 0,
+            "max_heartbeats_per_second": 60,
+            "ignore_player_limit_for_returning_players": false,
+            "allow_commands": "admins-only",
+            "autosave_interval": autosave_interval,
+            "autosave_slots": 5,
+            "afk_autokick_interval": 0,
+            "auto_pause": self.config.server.auto_pause,
+            "auto_pause_when_players_connect": false,
+            "only_admins_can_pause_the_game": true,
+            "autosave_only_on_server": true,
+            "non_blocking_saving": false,
+        });
+        let json = serde_json::to_string_pretty(&settings)
+            .context("serialize Factorio server settings")?;
+        std::fs::write(&settings_path, json)
+            .with_context(|| format!("write {}", settings_path.display()))?;
         Ok(())
     }
 
@@ -244,10 +289,16 @@ impl FactorioServer {
         tail: JoinHandle<()>,
         pump: JoinHandle<()>,
     ) {
+        let autosave_backup = spawn_autosave_backup_watcher(
+            self.config.clone(),
+            self.write_data_dir().join("saves"),
+            self.events.clone(),
+        );
         *self.inner.lock().expect("inner mutex poisoned") = Some(RunningInner {
             process,
             tail,
             pump,
+            autosave_backup,
         });
     }
 
@@ -298,6 +349,7 @@ impl FactorioServer {
     async fn start_after_status_changed(&self) -> anyhow::Result<()> {
         self.write_mod_list()?;
         self.write_server_config_ini()?;
+        self.write_server_settings()?;
         self.ensure_save_exists().await?;
 
         let exe = self.config.paths.server_dir.join(SERVER_EXE);
@@ -328,6 +380,9 @@ impl FactorioServer {
             ServerStatus::Starting | ServerStatus::Stopping | ServerStatus::Updating
         ) {
             anyhow::bail!("server is in a transitional state; wait or stop first");
+        }
+        if matches!(self.status(), ServerStatus::Running) {
+            anyhow::bail!("stop the server before taking a backup");
         }
 
         let world = &self.config.server.world;
@@ -439,28 +494,39 @@ impl FactorioServer {
     }
 }
 
-fn mod_list_for(dlc: FactorioDlc) -> ModList {
+fn mod_list_for(dlc: FactorioDlc, enabled_mods: &[String]) -> ModList {
     let dlc_enabled = matches!(dlc, FactorioDlc::SpaceAge);
-    ModList {
-        mods: vec![
-            ModEntry {
-                name: "base",
+    let mut mods = vec![
+        ModEntry {
+            name: "base".to_string(),
+            enabled: true,
+        },
+        ModEntry {
+            name: "elevated-rails".to_string(),
+            enabled: dlc_enabled,
+        },
+        ModEntry {
+            name: "quality".to_string(),
+            enabled: dlc_enabled,
+        },
+        ModEntry {
+            name: "space-age".to_string(),
+            enabled: dlc_enabled,
+        },
+    ];
+    for name in enabled_mods
+        .iter()
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty())
+    {
+        if mods.iter().all(|entry| entry.name != name) {
+            mods.push(ModEntry {
+                name: name.to_string(),
                 enabled: true,
-            },
-            ModEntry {
-                name: "elevated-rails",
-                enabled: dlc_enabled,
-            },
-            ModEntry {
-                name: "quality",
-                enabled: dlc_enabled,
-            },
-            ModEntry {
-                name: "space-age",
-                enabled: dlc_enabled,
-            },
-        ],
+            });
+        }
     }
+    ModList { mods }
 }
 
 fn promote_starting_to_running(
@@ -487,6 +553,84 @@ fn status_after_exit(
             ServerStatus::Crashed
         }
     }
+}
+
+fn spawn_autosave_backup_watcher(
+    config: AppConfig,
+    autosave_dir: PathBuf,
+    events: broadcast::Sender<ServerEvent>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut last_seen = newest_autosave(&autosave_dir).and_then(|(_, modified)| modified);
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            let Some((autosave, modified)) = newest_autosave(&autosave_dir) else {
+                continue;
+            };
+            let Some(modified) = modified else {
+                continue;
+            };
+            if last_seen.is_some_and(|seen| modified <= seen) {
+                continue;
+            }
+            if modified
+                .elapsed()
+                .is_ok_and(|elapsed| elapsed < Duration::from_secs(10))
+            {
+                continue;
+            }
+            last_seen = Some(modified);
+            match copy_autosave_backup(&config, &autosave) {
+                Ok(backup) => {
+                    let _ = events.send(ServerEvent::Log(format!(
+                        "[backup] autosave copied {} ({} bytes)",
+                        backup.id.0, backup.size_bytes
+                    )));
+                }
+                Err(e) => {
+                    let _ = events.send(ServerEvent::Warning(format!(
+                        "autosave backup failed: {e:#}"
+                    )));
+                }
+            }
+        }
+    })
+}
+
+fn newest_autosave(dir: &Path) -> Option<(PathBuf, Option<std::time::SystemTime>)> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_string_lossy();
+            if !name.starts_with("_autosave") || path.extension()? != "zip" {
+                return None;
+            }
+            let modified = entry.metadata().ok().and_then(|meta| meta.modified().ok());
+            Some((path, modified))
+        })
+        .max_by_key(|(_, modified)| *modified)
+}
+
+fn copy_autosave_backup(config: &AppConfig, autosave: &Path) -> anyhow::Result<Backup> {
+    let world = &config.server.world;
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let dir_name = format!("{timestamp}{}", BackupKind::Auto.dir_suffix());
+    let target_dir = config.paths.backup_dir.join(world).join(dir_name);
+    std::fs::create_dir_all(&target_dir)
+        .with_context(|| format!("create {}", target_dir.display()))?;
+    let save_target = target_dir.join(format!("{world}.zip"));
+    std::fs::copy(autosave, &save_target)
+        .with_context(|| format!("copy {} -> {}", autosave.display(), save_target.display()))?;
+    Ok(Backup {
+        id: BackupId(target_dir.to_string_lossy().to_string()),
+        world: world.clone(),
+        created_at: chrono::Local::now(),
+        dir: target_dir,
+        size_bytes: std::fs::metadata(&save_target)?.len(),
+        kind: BackupKind::Auto,
+    })
 }
 
 fn steam_username(config: &AppConfig) -> Option<String> {
@@ -738,9 +882,15 @@ fn parse_log_line(line: &str) -> Vec<ServerEvent> {
         });
     }
     if let Some(name) = parse_join_name(line) {
+        out.push(ServerEvent::PlayerJoined {
+            name: name.to_string(),
+        });
         out.push(ServerEvent::Log(format!("[+] {name}")));
     }
     if let Some(name) = parse_left_name(line) {
+        out.push(ServerEvent::PlayerLeft {
+            name: name.to_string(),
+        });
         out.push(ServerEvent::Log(format!("[-] {name}")));
     }
 
@@ -799,6 +949,29 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, ServerEvent::Log(s) if s == "[+] alice")));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, ServerEvent::PlayerJoined { name } if name == "alice")));
+    }
+
+    #[test]
+    fn writes_auto_pause_server_settings() {
+        let root = std::env::temp_dir().join(format!(
+            "factorio-server-maintainer-test-{}",
+            std::process::id()
+        ));
+        let mut cfg = test_config();
+        cfg.paths.save_dir = root.join("Saves");
+        cfg.server.auto_pause = true;
+        let server = FactorioServer::new(cfg, root.join("Manager"));
+
+        server
+            .write_server_settings()
+            .expect("write server settings");
+        let json = std::fs::read_to_string(server.server_settings_path()).expect("read settings");
+        assert!(json.contains(r#""auto_pause": true"#));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -822,12 +995,19 @@ mod tests {
 
     #[test]
     fn mod_list_can_enable_space_age_bundle() {
-        let list = mod_list_for(FactorioDlc::SpaceAge);
+        let list = mod_list_for(FactorioDlc::SpaceAge, &[]);
         let json = serde_json::to_string(&list).expect("serialize mod list");
         assert!(json.contains(r#""name":"base","enabled":true"#));
         assert!(json.contains(r#""name":"elevated-rails","enabled":true"#));
         assert!(json.contains(r#""name":"quality","enabled":true"#));
         assert!(json.contains(r#""name":"space-age","enabled":true"#));
+    }
+
+    #[test]
+    fn mod_list_includes_enabled_external_mods() {
+        let list = mod_list_for(FactorioDlc::SpaceAge, &["respawn-beacon".to_string()]);
+        let json = serde_json::to_string(&list).expect("serialize mod list");
+        assert!(json.contains(r#""name":"respawn-beacon","enabled":true"#));
     }
 
     fn test_config() -> AppConfig {

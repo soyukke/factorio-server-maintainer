@@ -1852,11 +1852,13 @@ dependencies = [
  "factorio",
  "gsm-core",
  "rfd",
+ "serde_json",
  "slint",
  "slint-build",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "ureq",
  "winresource",
 ]
 
