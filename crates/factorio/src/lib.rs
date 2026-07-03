@@ -910,10 +910,18 @@ fn parse_left_name(line: &str) -> Option<&str> {
 }
 
 fn trim_player_prefix(value: &str) -> &str {
-    value
+    let value = value
         .rsplit_once(": ")
         .map_or(value, |(_, name)| name)
-        .trim()
+        .trim();
+    trim_console_player_marker(value)
+}
+
+fn trim_console_player_marker(value: &str) -> &str {
+    ["[JOIN]", "[LEAVE]", "[CHAT]"]
+        .into_iter()
+        .find_map(|marker| value.rsplit_once(marker).map(|(_, name)| name.trim()))
+        .unwrap_or(value)
 }
 
 #[allow(dead_code)]
@@ -968,6 +976,19 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, ServerEvent::PlayerJoined { name } if name == "alice")));
+    }
+
+    #[test]
+    fn parses_player_name_with_factorio_console_marker() {
+        let joined = parse_log_line("2026-07-04 07:18:41 [JOIN] alice joined the game");
+        assert!(joined
+            .iter()
+            .any(|e| matches!(e, ServerEvent::PlayerJoined { name } if name == "alice")));
+
+        let left = parse_log_line("2026-07-04 07:21:10 [LEAVE] alice left the game");
+        assert!(left
+            .iter()
+            .any(|e| matches!(e, ServerEvent::PlayerLeft { name } if name == "alice")));
     }
 
     #[test]

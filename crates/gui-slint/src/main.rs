@@ -780,10 +780,18 @@ fn parse_factorio_left_name(line: &str) -> Option<&str> {
 }
 
 fn trim_factorio_player_prefix(value: &str) -> &str {
-    value
+    let value = value
         .rsplit_once(": ")
         .map_or(value, |(_, name)| name)
-        .trim()
+        .trim();
+    trim_factorio_console_player_marker(value)
+}
+
+fn trim_factorio_console_player_marker(value: &str) -> &str {
+    ["[JOIN]", "[LEAVE]", "[CHAT]"]
+        .into_iter()
+        .find_map(|marker| value.rsplit_once(marker).map(|(_, name)| name.trim()))
+        .unwrap_or(value)
 }
 
 fn config_auto_pause(config: &Option<AppConfig>) -> bool {
@@ -996,8 +1004,17 @@ fn install_mod_from_portal(mod_name: &str, mod_dir: &Path) -> anyhow::Result<Str
     let mod_name = mod_name.trim();
     anyhow::ensure!(!mod_name.is_empty(), "mod name is empty");
     let (username, token) = factorio_service_credentials(mod_dir)?;
-    let url = format!("https://mods.factorio.com/api/mods/{mod_name}/full");
-    let details_text = ureq::get(&url).call()?.into_string()?;
+    let cache_bust = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    let url = format!("https://mods.factorio.com/api/mods/{mod_name}/full?cache_bust={cache_bust}");
+    let details_text = ureq::get(&url)
+        .set("Cache-Control", "no-cache")
+        .call()
+        .context("fetch mod portal release information")?
+        .into_string()
+        .context("read mod portal release information")?;
     let details: serde_json::Value = serde_json::from_str(&details_text)?;
     let release = details["releases"]
         .as_array()
@@ -1014,11 +1031,25 @@ fn install_mod_from_portal(mod_name: &str, mod_dir: &Path) -> anyhow::Result<Str
     let target = mod_dir.join(file_name);
     let download =
         format!("https://mods.factorio.com{download_url}?username={username}&token={token}");
-    let mut response = ureq::get(&download).call()?.into_reader();
+    let mut response = ureq::get(&download)
+        .call()
+        .map_err(|err| match err {
+            ureq::Error::Status(code, _) => {
+                anyhow::anyhow!("mod portal download returned status code {code}")
+            }
+            ureq::Error::Transport(_) => {
+                anyhow::anyhow!("mod portal download failed; check network or Factorio login")
+            }
+        })?
+        .into_reader();
     let mut file =
         std::fs::File::create(&target).with_context(|| format!("create {}", target.display()))?;
-    std::io::copy(&mut response, &mut file)
-        .with_context(|| format!("download mod to {}", target.display()))?;
+    if let Err(err) = std::io::copy(&mut response, &mut file)
+        .with_context(|| format!("download mod to {}", target.display()))
+    {
+        let _ = std::fs::remove_file(&target);
+        return Err(err);
+    }
 
     mod_name_from_zip(&target).context("downloaded file name did not look like a mod zip")
 }
@@ -2006,6 +2037,19 @@ alice left the game
 ";
         let roster = restore_player_roster_from_text(text);
         assert!(!roster.contains_key("old"));
+        assert!(!roster.contains_key("alice"));
+        assert!(roster.contains_key("bob"));
+    }
+
+    #[test]
+    fn restores_player_roster_from_console_markers() {
+        let text = "\
+Hosting game at IP ADDR
+2026-07-04 07:18:41 [JOIN] alice joined the game
+2026-07-04 07:19:28 [JOIN] bob joined the game
+2026-07-04 07:21:10 [LEAVE] alice left the game
+";
+        let roster = restore_player_roster_from_text(text);
         assert!(!roster.contains_key("alice"));
         assert!(roster.contains_key("bob"));
     }

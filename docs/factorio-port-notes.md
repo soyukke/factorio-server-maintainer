@@ -63,6 +63,14 @@ dlc = "space_age"
 
 これにより、Factorio が別のユーザーデータディレクトリを見に行って DLC 状態がぶれる問題を避けます。
 
+## Personal Respawn Anchor
+
+`personal-respawn-anchor` は、マルチ向けの小さな自作 mod です。管理ツールには同梱せず、Mod Portal から取得します。
+
+公開mod `respawn-beacon` は `force.set_spawn_position` を使うため、通常の協力マルチでは全員共通のスポーン地点を変更します。`personal-respawn-anchor` はチームのスポーン地点を触らず、プレイヤーごと・惑星ごとにアンカー位置を保存し、復活直後に本人だけをその位置へ移動します。アンカーを置くと、マップに `<プレイヤー名> spawn` のタグも追加します。
+
+有効化する場合は `config.toml` または GUI の mod 管理で `enabled_mods` に `personal-respawn-anchor` を入れます。`respawn-beacon` と同時有効にすると挙動が混ざるため、どちらか片方だけを使います。
+
 ## SteamCMD
 
 SteamCMD は自己更新型です。固定ツールではなく `just` タスクで bootstrap します。

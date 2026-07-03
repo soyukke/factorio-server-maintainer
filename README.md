@@ -144,17 +144,43 @@ GUI の「Mod」欄で、Mod Portal から mod を追加できます。
 %USERPROFILE%\.factorio-server-maintainer\Server\mods
 ```
 
-「Mod Portal名」に `respawn-beacon` のような mod 名を入れて「Mod Portalから追加」を押すと、最新リリースをダウンロードしてこのフォルダへコピーします。ダウンロードには Factorio の `player-data.json` にある `service-username` / `service-token` を使います。トークンはこのツールの `config.toml` には保存しません。
+「Mod Portal名」に mod 名を入れて「Mod Portalから追加」を押すと、最新リリースをダウンロードしてこのフォルダへコピーします。ダウンロードには Factorio の `player-data.json` にある `service-username` / `service-token` を使います。トークンはこのツールの `config.toml` には保存しません。
 
 zip を手元に持っている場合は「mod zipを追加」から選べます。Factorio の mod zip は通常 `<mod-name>_<version>.zip` なので、コピー後に `<mod-name>` を検出し、「有効にするmod名」に自動追加します。
 
 有効化したい mod は「有効にするmod名」に 1 行ずつ書いて保存します。保存後、次回サーバー起動時に `mod-list.json` へ反映されます。自動追加された名前を消せば、その mod は無効扱いになります。
 
 ```text
-respawn-beacon
+personal-respawn-anchor
 ```
 
 Gameplay mod はサーバーだけでは完結しません。参加者のクライアントにも同じ mod セットが必要です。Factorio は接続時に mod 同期を促しますが、最終的には参加者側にも mod が入ります。
+
+### Personal Respawn Anchor
+
+`personal-respawn-anchor` は、マルチ向けの小さな自作 mod です。管理ツールには同梱せず、Mod Portal から取得します。
+
+`respawn-beacon` は Factorio の `force`、つまり通常の協力マルチではチーム全体のスポーン地点を書き換える挙動でした。そのため、誰かがアンカーを置くと全員の復活地点が変わります。
+
+`personal-respawn-anchor` はその代わりに、プレイヤーごと・惑星ごとにアンカー位置を保存します。ゲーム本来のチームスポーン地点は変更せず、死亡後に復活した本人だけを自分のアンカーへ移動します。
+
+- 友達が置いたアンカーは友達用
+- 自分が置いたアンカーは自分用
+- 惑星ごとに別々のアンカーを持てる
+- アンカーを回収すると、そのプレイヤーのその惑星の登録だけ消える
+- マップには `<プレイヤー名> spawn` というタグを追加する
+
+GUI の「Mod Portal名」に次を入れて追加します。
+
+```text
+personal-respawn-anchor
+```
+
+サーバーに反映するには、GUI の「有効にするmod名」に `personal-respawn-anchor` を入れて保存し、サーバーを再起動します。古い `respawn-beacon` と同時に有効にすると挙動が混ざるため、どちらか片方だけを使ってください。
+
+参加者は Factorio の接続時に mod 同期を促されます。
+
+`respawn-beacon` への敬意と独立実装であることは、mod側のクレジットに明記します。コード、画像、thumbnail はコピーしていません。
 
 ## SteamCMD
 
