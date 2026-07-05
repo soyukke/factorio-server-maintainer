@@ -745,19 +745,99 @@ fn install_player_model(
 }
 
 fn apply_readme_screenshot_demo(ui: &MainWindow) {
-    ui.set_main_tab(0);
-    ui.set_status_text("稼働中".into());
-    ui.set_install_status_text("Factorio サーバーを起動できます".into());
+    let language = readme_demo_language();
+    apply_strings(ui, translations::for_language(language));
+    ui.set_language_index(translations::language_index(language));
+
+    ui.set_main_tab(readme_demo_tab());
+    apply_readme_demo_status(ui, language);
+    apply_readme_demo_settings(ui);
+    apply_readme_demo_players(ui, language);
+}
+
+fn readme_demo_language() -> Language {
+    match std::env::var("FACTORIO_MANAGER_README_LANGUAGE") {
+        Ok(value) if value.eq_ignore_ascii_case("en") => Language::En,
+        _ => Language::Ja,
+    }
+}
+
+fn readme_demo_tab() -> i32 {
+    std::env::var("FACTORIO_MANAGER_README_TAB")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|tab| (0..=4).contains(tab))
+        .unwrap_or(0)
+}
+
+fn apply_readme_demo_status(ui: &MainWindow, language: Language) {
+    let (status, ready, simulation, count) = match language {
+        Language::Ja => (
+            "稼働中",
+            "Factorio サーバーを起動できます",
+            "プレイヤーがいるためワールドは進行中",
+            "接続中: 3人",
+        ),
+        Language::En => (
+            "Running",
+            "Factorio server is ready",
+            "Players connected: world is running",
+            "3 player(s) connected",
+        ),
+    };
+    ui.set_status_text(status.into());
+    ui.set_install_status_text(ready.into());
     ui.set_steamcmd_ready(true);
     ui.set_factorio_ready(true);
     ui.set_server_controls_enabled(true);
     ui.set_server_running(true);
     ui.set_busy(false);
+    ui.set_simulation_state_text(simulation.into());
+    ui.set_backups_count_text("6 snapshot(s)".into());
+    ui.set_log_text("[ready] accepting connections\n[net] friend-alpha: InGame, ping 18 ms".into());
+    ui.set_error_text("".into());
+    ui.set_players_count_text(count.into());
+}
+
+fn apply_readme_demo_settings(ui: &MainWindow) {
     ui.set_public_address("factory-demo.tailnet.example:34197".into());
     ui.set_public_address_status("".into());
     ui.set_params_summary("Space Age / factory-main / port 34197".into());
-    ui.set_paths_summary("撮影用の匿名データです".into());
-    ui.set_simulation_state_text("プレイヤーがいるためワールドは進行中".into());
+    ui.set_paths_summary("README screenshot demo data".into());
+    ui.set_steamcmd_path(r"C:\Demo\FactorioServerMaintainer\SteamCMD\steamcmd.exe".into());
+    ui.set_server_dir(r"C:\Demo\FactorioServerMaintainer\Server".into());
+    ui.set_save_dir(r"C:\Demo\FactorioServerMaintainer\Saves".into());
+    ui.set_backup_dir(r"C:\Demo\GameServerBackups\factorio".into());
+    ui.set_log_file(r"C:\Demo\FactorioServerMaintainer\Server\logs\server.log".into());
+    ui.set_steam_username("demo-steam-user".into());
+    ui.set_server_name("Factory With Friends".into());
+    ui.set_world_name("factory-main".into());
+    ui.set_server_password("factorio".into());
+    ui.set_server_port("34197".into());
+    ui.set_server_public("0".into());
+    ui.set_save_interval("900".into());
+    ui.set_backup_count("6".into());
+    ui.set_auto_pause(true);
+    ui.set_dlc_index(1);
+    ui.set_stop_when_empty(true);
+    ui.set_empty_stop_delay_secs("300".into());
+    ui.set_graceful_stop_timeout_secs("30".into());
+    ui.set_auto_backup_before_update(true);
+    ui.set_mod_dir(r"C:\Demo\FactorioServerMaintainer\Server\mods".into());
+    ui.set_mod_portal_name("personal-respawn-anchor".into());
+    ui.set_detected_mods_text("personal-respawn-anchor\nRateCalculator".into());
+    ui.set_enabled_mods_text("personal-respawn-anchor\nRateCalculator".into());
+
+    let worlds = ["factory-main", "space-age-coop", "railworld-test"]
+        .into_iter()
+        .map(slint::SharedString::from)
+        .collect::<Vec<_>>();
+    ui.set_save_worlds(slint::ModelRc::from(std::rc::Rc::new(
+        slint::VecModel::from(worlds),
+    )));
+}
+
+fn apply_readme_demo_players(ui: &MainWindow, language: Language) {
     ui.set_network_status_text(
         [
             "factory-admin: connected, direct, ping 8 ms",
@@ -783,8 +863,16 @@ fn apply_readme_screenshot_demo(ui: &MainWindow) {
     install_player_model(
         ui,
         rows,
-        "接続中: 3人".to_string(),
-        "プレイヤーがいるためワールドは進行中".to_string(),
+        match language {
+            Language::Ja => "接続中: 3人",
+            Language::En => "3 player(s) connected",
+        }
+        .to_string(),
+        match language {
+            Language::Ja => "プレイヤーがいるためワールドは進行中",
+            Language::En => "Players connected: world is running",
+        }
+        .to_string(),
     );
 }
 
