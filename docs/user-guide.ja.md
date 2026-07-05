@@ -9,7 +9,19 @@
 
 ## 1. 起動する
 
-初回セットアップ:
+非開発者向けの通常手順:
+
+1. [GitHub Releases](https://github.com/soyukke/factorio-server-maintainer/releases) から最新の `factorio-server-maintainer-*-windows-x64.zip` をダウンロードします
+2. 書き込み可能な場所に展開します  
+   例: `%USERPROFILE%\Apps\FactorioServerMaintainer`
+3. `factorio-server-manager.exe` を起動します
+4. 初回は `保存` を押して設定を作成します
+5. `更新` を押して SteamCMD と Factorio server を取得します
+6. 取得後に `開始` を押します
+
+release zip を使う場合、Rust、`just`、`mise`、`just setup` は不要です。
+
+開発者としてソースから動かす場合:
 
 ```powershell
 just setup

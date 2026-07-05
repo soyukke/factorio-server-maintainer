@@ -9,7 +9,20 @@ The screenshots below are from the real app running with anonymized demo data.
 
 ## 1. Open the App
 
-Initial setup:
+Normal flow for non-developers:
+
+1. Download the latest `factorio-server-maintainer-*-windows-x64.zip` from
+   [GitHub Releases](https://github.com/soyukke/factorio-server-maintainer/releases)
+2. Extract it into a writable folder  
+   Example: `%USERPROFILE%\Apps\FactorioServerMaintainer`
+3. Run `factorio-server-manager.exe`
+4. On first launch, press `Save` to create the app config
+5. Press `Update` to install SteamCMD and the Factorio server
+6. Press `Start`
+
+When using the release zip, you do not need Rust, `just`, `mise`, or `just setup`.
+
+Developer flow from source:
 
 ```powershell
 just setup

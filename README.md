@@ -32,6 +32,19 @@ real usernames, real paths, real IP addresses, or tokens.
 
 ## Quick Start
 
+For normal players/admins, download the latest Windows zip from
+[GitHub Releases](https://github.com/soyukke/factorio-server-maintainer/releases).
+
+1. Extract `factorio-server-maintainer-*-windows-x64.zip` into a writable folder.
+2. Run `factorio-server-manager.exe`.
+3. Press `Save` once to create the initial config.
+4. Press `Update` to install SteamCMD and the Factorio server.
+5. Press `Start`.
+
+You do not need Rust, `just`, `mise`, or `just setup` when using a release zip.
+
+## Developer Setup
+
 Install the local runtime and server tools:
 
 ```powershell
@@ -46,6 +59,22 @@ just run
 
 `just setup` is idempotent. Running it again reuses existing files and fills in
 only missing pieces.
+
+## Creating a Release
+
+Tag releases with a `v*` tag. GitHub Actions builds a Windows portable zip and
+attaches it to the GitHub Release.
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+To build the same package locally:
+
+```powershell
+scripts\package-release.ps1 -Version v0.1.0
+```
 
 ## Default Folders
 

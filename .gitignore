@@ -1,6 +1,7 @@
 # Rust build artifacts (multi-GB)
 /target/
 **/target/
+/dist/
 
 # Build script output kept by build.bat
 /build.log
