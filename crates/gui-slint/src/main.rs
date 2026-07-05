@@ -5,7 +5,7 @@
 mod translations;
 
 use anyhow::Context;
-use factorio::FactorioServer;
+use factorio::{parse_network_status_line, FactorioServer};
 use gsm_core::{
     AppConfig, Backup, BackupId, BackupKind, FactorioDlc, GameServerManager, Language,
     ManagerConfig, PathsConfig, ServerConfig, ServerEvent, ServerStatus,
@@ -32,6 +32,8 @@ struct UiState {
     players: HashMap<String, chrono::DateTime<chrono::Local>>,
     /// Prevent auto-stop from acting on an incomplete roster after GUI restart.
     player_roster_observed: bool,
+    /// Recent Factorio peer/network diagnostics shown in the players tab.
+    network_lines: Vec<String>,
     /// Last refresh from `list_backups`. Cached so we can rebuild row models
     /// after toggling sort / selection without going back to disk.
     last_backups: Vec<Backup>,
@@ -81,6 +83,7 @@ fn main() -> anyhow::Result<()> {
         last_status: ServerStatus::Stopped,
         players: HashMap::new(),
         player_roster_observed: false,
+        network_lines: Vec::new(),
         last_backups: Vec::new(),
         selected_backup_ids: HashSet::new(),
         backup_sort_column: 0,
@@ -166,6 +169,7 @@ fn main() -> anyhow::Result<()> {
                     tracing::info!("re-attached to running server");
                     restore_player_roster_from_log_async(
                         server_for_reattach.config().paths.log_file.clone(),
+                        server_for_reattach.factorio_current_log_path(),
                         state_for_reattach,
                         weak_for_reattach,
                     )
@@ -192,6 +196,10 @@ fn main() -> anyhow::Result<()> {
         manager_dir.clone(),
     );
     wire_connection_callbacks(&ui, state.clone(), manager_dir.clone());
+
+    if std::env::var_os("FACTORIO_MANAGER_README_SCREENSHOT").is_some() {
+        apply_readme_screenshot_demo(&ui);
+    }
 
     ui.run()?;
     Ok(())
@@ -350,6 +358,7 @@ fn apply_strings(ui: &MainWindow, t: &Strings) {
     ui.set_t_lbl_empty_stop_delay(t.lbl_empty_stop_delay.into());
 
     ui.set_t_group_players(t.group_players.into());
+    ui.set_t_group_network(t.group_network.into());
     ui.set_t_group_backup(t.group_backup.into());
     ui.set_t_btn_refresh(t.btn_refresh.into());
     ui.set_t_btn_open_backup(t.btn_open_backup.into());
@@ -576,7 +585,14 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
         loop {
             match rx.recv().await {
                 Ok(ev) => {
-                    let (status_text, flags, language, players_update, empty_stop_delay) = {
+                    let (
+                        status_text,
+                        flags,
+                        language,
+                        players_update,
+                        network_update,
+                        empty_stop_delay,
+                    ) = {
                         let mut guard = state.lock().expect("state mutex poisoned");
                         if let ServerEvent::StatusChanged(s) = &ev {
                             guard.last_status = *s;
@@ -585,9 +601,11 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
                             if !matches!(*s, ServerStatus::Running) {
                                 guard.players.clear();
                                 guard.player_roster_observed = false;
+                                guard.network_lines.clear();
                             }
                         }
                         let mut roster_changed = false;
+                        let mut network_changed = false;
                         match &ev {
                             ServerEvent::PlayerJoined { name } => {
                                 guard.players.insert(name.clone(), chrono::Local::now());
@@ -600,6 +618,15 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
                             }
                             ServerEvent::StatusChanged(_) => {
                                 roster_changed = true;
+                                network_changed = true;
+                            }
+                            ServerEvent::NetworkStatus { text } => {
+                                guard.network_lines.push(text.clone());
+                                if guard.network_lines.len() > 8 {
+                                    let overflow = guard.network_lines.len() - 8;
+                                    guard.network_lines.drain(..overflow);
+                                }
+                                network_changed = true;
                             }
                             _ => {}
                         }
@@ -622,8 +649,20 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
                         } else {
                             None
                         };
+                        let network_update = if network_changed {
+                            Some(guard.network_lines.join("\n"))
+                        } else {
+                            None
+                        };
                         let empty_stop_delay = empty_stop_delay_after_event(&guard, &ev);
-                        (st, flags, lang, players_update, empty_stop_delay)
+                        (
+                            st,
+                            flags,
+                            lang,
+                            players_update,
+                            network_update,
+                            empty_stop_delay,
+                        )
                     };
                     if let Some(delay) = empty_stop_delay {
                         schedule_empty_stop(server.clone(), state.clone(), weak.clone(), delay);
@@ -640,6 +679,9 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
                         }
                         if let Some((rows, count_text, simulation_text)) = players_update {
                             install_player_model(&ui, rows, count_text, simulation_text);
+                        }
+                        if let Some(text) = network_update {
+                            ui.set_network_status_text(text.into());
                         }
                         if let Some(line) = log_line {
                             let mut buf = ui.get_log_text().to_string();
@@ -702,17 +744,65 @@ fn install_player_model(
     ui.set_simulation_state_text(simulation_text.into());
 }
 
+fn apply_readme_screenshot_demo(ui: &MainWindow) {
+    ui.set_main_tab(0);
+    ui.set_status_text("稼働中".into());
+    ui.set_install_status_text("Factorio サーバーを起動できます".into());
+    ui.set_steamcmd_ready(true);
+    ui.set_factorio_ready(true);
+    ui.set_server_controls_enabled(true);
+    ui.set_server_running(true);
+    ui.set_busy(false);
+    ui.set_public_address("factory-demo.tailnet.example:34197".into());
+    ui.set_public_address_status("".into());
+    ui.set_params_summary("Space Age / factory-main / port 34197".into());
+    ui.set_paths_summary("撮影用の匿名データです".into());
+    ui.set_simulation_state_text("プレイヤーがいるためワールドは進行中".into());
+    ui.set_network_status_text(
+        [
+            "factory-admin: connected, direct, ping 8 ms",
+            "friend-alpha: connected, direct, ping 18 ms",
+            "friend-beta: connected, relay ok, ping 32 ms",
+        ]
+        .join("\n")
+        .into(),
+    );
+
+    let now = chrono::Local::now();
+    let rows = [
+        ("factory-admin", now - chrono::Duration::minutes(42)),
+        ("friend-alpha", now - chrono::Duration::minutes(35)),
+        ("friend-beta", now - chrono::Duration::minutes(12)),
+    ]
+    .into_iter()
+    .map(|(name, at)| PlayerRow {
+        player_name: name.into(),
+        joined_at: at.format("%H:%M:%S").to_string().into(),
+    })
+    .collect();
+    install_player_model(
+        ui,
+        rows,
+        "接続中: 3人".to_string(),
+        "プレイヤーがいるためワールドは進行中".to_string(),
+    );
+}
+
 async fn restore_player_roster_from_log_async(
     log_file: PathBuf,
+    network_log_file: PathBuf,
     state: Arc<Mutex<UiState>>,
     weak: slint::Weak<MainWindow>,
 ) {
-    let roster = match tokio::task::spawn_blocking(move || {
-        restore_player_roster_from_log(&log_file)
+    let restored = match tokio::task::spawn_blocking(move || {
+        Ok::<_, anyhow::Error>((
+            restore_player_roster_from_log(&log_file)?,
+            restore_network_lines_from_log(&network_log_file),
+        ))
     })
     .await
     {
-        Ok(Ok(roster)) => roster,
+        Ok(Ok(restored)) => restored,
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "failed to restore player roster from log");
             return;
@@ -723,21 +813,30 @@ async fn restore_player_roster_from_log_async(
         }
     };
 
-    let (rows, count_text, simulation_text) = {
+    let network_lines = restored.1;
+    let (rows, count_text, simulation_text, network_text) = {
         let mut guard = state.lock().expect("state mutex poisoned");
-        guard.players = roster;
+        guard.players = restored.0;
+        guard.network_lines = network_lines;
         guard.player_roster_observed = true;
         let t = translations::for_language(guard.language);
-        build_player_data(
+        let (rows, count_text, simulation_text) = build_player_data(
             &guard.players,
             guard.last_status,
             config_auto_pause(&guard.config),
             t,
+        );
+        (
+            rows,
+            count_text,
+            simulation_text,
+            guard.network_lines.join("\n"),
         )
     };
 
     let _ = weak.upgrade_in_event_loop(move |ui| {
         install_player_model(&ui, rows, count_text, simulation_text);
+        ui.set_network_status_text(network_text.into());
     });
 }
 
@@ -765,6 +864,22 @@ fn restore_player_roster_from_text(text: &str) -> HashMap<String, chrono::DateTi
     }
 
     players
+}
+
+fn restore_network_lines_from_log(log_file: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(log_file) else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        if let Some(status) = parse_network_status_line(line) {
+            lines.push(status);
+            if lines.len() > 8 {
+                lines.remove(0);
+            }
+        }
+    }
+    lines
 }
 
 fn parse_factorio_join_name(line: &str) -> Option<&str> {
@@ -1956,6 +2071,7 @@ fn log_line_from(ev: &ServerEvent, t: &Strings) -> Option<String> {
         }
         ServerEvent::PlayerJoined { name } => Some(format!("[+] {name}")),
         ServerEvent::PlayerLeft { name } => Some(format!("[-] {name}")),
+        ServerEvent::NetworkStatus { text } => Some(format!("[net] {text}")),
         ServerEvent::ServerReady => Some("[ready] accepting connections".into()),
         ServerEvent::Warning(s) => Some(format!("[warning] {s}")),
         ServerEvent::StatusChanged(s) => {

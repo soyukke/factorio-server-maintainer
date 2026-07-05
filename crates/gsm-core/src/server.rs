@@ -58,6 +58,10 @@ pub enum ServerEvent {
     PlayerLeft {
         name: String,
     },
+    /// Network diagnostics derived from Factorio peer state logs.
+    NetworkStatus {
+        text: String,
+    },
     /// Startup completed; the server is accepting connections.
     ServerReady,
     /// For example: forced termination may have lost data since the last autosave.

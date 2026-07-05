@@ -89,8 +89,8 @@ component StatusStep inherits Rectangle {
     in property <bool> done;
     in property <bool> active;
 
+    width: 168px;
     height: 32px;
-    horizontal-stretch: 1;
     border-radius: 4px;
     background: root.done
         ? #263116
@@ -969,12 +969,14 @@ export component MainWindow inherits Window {
 
     // Players / Backups translation strings
     in property <string> t-group-players;
+    in property <string> t-group-network;
     in property <string> t-group-backup;
     in property <string> t-btn-refresh;
     in property <string> t-btn-open-backup;
     in property <string> t-no-players;
     in property <string> t-no-backups;
     in-out property <string> players-count-text;
+    in-out property <string> network-status-text: "";
     in-out property <string> backups-count-text;
 
     in-out property <[PlayerRow]> player-rows;
@@ -1273,6 +1275,16 @@ export component MainWindow inherits Window {
                                 vertical-alignment: center;
                             }
                         }
+                    }
+                }
+                Section {
+                    title: root.t-group-network;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: root.network-status-text == "" ? "No network events yet" : root.network-status-text;
+                        color: #cfd5db;
+                        font-size: 11px;
+                        wrap: word-wrap;
                     }
                 }
             }

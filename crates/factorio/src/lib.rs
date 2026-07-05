@@ -54,15 +54,19 @@ pub struct FactorioServer {
 
 struct RunningInner {
     process: Arc<ServerProcess>,
-    tail: JoinHandle<()>,
-    pump: JoinHandle<()>,
+    tails: Vec<JoinHandle<()>>,
+    pumps: Vec<JoinHandle<()>>,
     autosave_backup: JoinHandle<()>,
 }
 
 impl RunningInner {
     fn shutdown(self) {
-        self.tail.abort();
-        self.pump.abort();
+        for tail in self.tails {
+            tail.abort();
+        }
+        for pump in self.pumps {
+            pump.abort();
+        }
         self.autosave_backup.abort();
     }
 }
@@ -108,6 +112,10 @@ impl FactorioServer {
 
     pub fn write_data_dir(&self) -> PathBuf {
         self.config.paths.server_dir.join("UserData")
+    }
+
+    pub fn factorio_current_log_path(&self) -> PathBuf {
+        self.write_data_dir().join("factorio-current.log")
     }
 
     pub fn build_argv(&self) -> Vec<String> {
@@ -286,8 +294,8 @@ impl FactorioServer {
     fn install_running_inner(
         &self,
         process: Arc<ServerProcess>,
-        tail: JoinHandle<()>,
-        pump: JoinHandle<()>,
+        tails: Vec<JoinHandle<()>>,
+        pumps: Vec<JoinHandle<()>>,
     ) {
         let autosave_backup = spawn_autosave_backup_watcher(
             self.config.clone(),
@@ -296,8 +304,8 @@ impl FactorioServer {
         );
         *self.inner.lock().expect("inner mutex poisoned") = Some(RunningInner {
             process,
-            tail,
-            pump,
+            tails,
+            pumps,
             autosave_backup,
         });
     }
@@ -368,9 +376,16 @@ impl FactorioServer {
         let (rx, tail_handle) =
             logtail::spawn(LogTailConfig::new(self.config.paths.log_file.clone()));
         let pump_handle = self.spawn_log_pump(rx);
+        let (net_rx, net_tail_handle) =
+            logtail::spawn(LogTailConfig::new(self.factorio_current_log_path()));
+        let net_pump_handle = self.spawn_log_pump(net_rx);
         self.spawn_exit_watcher(process.clone(), self.state_path());
         self.spawn_startup_watchdog(process.clone());
-        self.install_running_inner(process, tail_handle, pump_handle);
+        self.install_running_inner(
+            process,
+            vec![tail_handle, net_tail_handle],
+            vec![pump_handle, net_pump_handle],
+        );
         Ok(())
     }
 
@@ -455,10 +470,25 @@ impl FactorioServer {
             channel_capacity: 1024,
             start_pos: log_start_pos,
         });
+        let current_log = self.factorio_current_log_path();
+        let current_log_start_pos = std::fs::metadata(&current_log)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let (net_rx, net_tail_handle) = logtail::spawn(LogTailConfig {
+            path: current_log,
+            poll_interval: Duration::from_millis(250),
+            channel_capacity: 1024,
+            start_pos: current_log_start_pos,
+        });
 
         let pump_handle = self.spawn_log_pump(rx);
+        let net_pump_handle = self.spawn_log_pump(net_rx);
         self.spawn_exit_watcher(process.clone(), state_path);
-        self.install_running_inner(process, tail_handle, pump_handle);
+        self.install_running_inner(
+            process,
+            vec![tail_handle, net_tail_handle],
+            vec![pump_handle, net_pump_handle],
+        );
         *self.status.lock().expect("status mutex poisoned") = ServerStatus::Running;
         let _ = self
             .events
@@ -893,6 +923,9 @@ fn parse_log_line(line: &str) -> Vec<ServerEvent> {
         });
         out.push(ServerEvent::Log(format!("[-] {name}")));
     }
+    if let Some(text) = parse_network_status_line(line) {
+        out.push(ServerEvent::NetworkStatus { text });
+    }
 
     out
 }
@@ -922,6 +955,47 @@ fn trim_console_player_marker(value: &str) -> &str {
         .into_iter()
         .find_map(|marker| value.rsplit_once(marker).map(|(_, name)| name.trim()))
         .unwrap_or(value)
+}
+
+pub fn parse_network_status_line(line: &str) -> Option<String> {
+    if let Some(peer) = value_between(line, "adding peer(", ")") {
+        return Some(format!("peer {peer}: connected"));
+    }
+    if let Some(peer) = value_between(line, "removing peer(", ")") {
+        return Some(format!("peer {peer}: disconnected"));
+    }
+    if let Some(peer) = value_between(line, "Disconnect notification for peer (", ")") {
+        return Some(format!("peer {peer}: disconnect requested"));
+    }
+    if let Some(peer) = value_between(line, "peerID(", ")") {
+        if let Some(state) = value_after(line, "newState(").and_then(|tail| tail.split(')').next())
+        {
+            return Some(format!("peer {peer}: {state}"));
+        }
+    }
+    if line.contains("Serving map(") {
+        let peer = value_between(line, " for peer(", ")")?;
+        let size = value_after(line, " size(")
+            .and_then(|tail| tail.split(')').next())
+            .and_then(|raw| raw.parse::<u64>().ok())
+            .map(human_mb)
+            .unwrap_or_else(|| "unknown size".to_string());
+        return Some(format!("peer {peer}: map transfer {size}"));
+    }
+    None
+}
+
+fn value_between<'a>(line: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
+    let tail = line.split_once(prefix)?.1;
+    tail.split_once(suffix).map(|(value, _)| value)
+}
+
+fn value_after<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
+    line.split_once(prefix).map(|(_, tail)| tail)
+}
+
+fn human_mb(bytes: u64) -> String {
+    format!("{:.1} MB", bytes as f64 / 1_048_576.0)
 }
 
 #[allow(dead_code)]
@@ -989,6 +1063,30 @@ mod tests {
         assert!(left
             .iter()
             .any(|e| matches!(e, ServerEvent::PlayerLeft { name } if name == "alice")));
+    }
+
+    #[test]
+    fn parses_network_peer_state_lines() {
+        let events = parse_log_line(
+            "101.531 Info ServerMultiplayerManager.cpp:978: updateTick(5411664) \
+             received stateChanged peerID(2) oldState(ConnectedWaitingForMap) \
+             newState(ConnectedDownloadingMap)",
+        );
+        assert!(events.iter().any(
+            |e| matches!(e, ServerEvent::NetworkStatus { text } if text == "peer 2: ConnectedDownloadingMap")
+        ));
+    }
+
+    #[test]
+    fn parses_network_map_transfer_lines() {
+        let events = parse_log_line(
+            "101.470 Info ServerMultiplayerManager.cpp:1039: UpdateTick(5411661) \
+             Serving map(C:\\temp\\mp-save-1.zip) for peer(2) size(12195570) \
+             auxiliary(145) crc(4172093775)",
+        );
+        assert!(events.iter().any(
+            |e| matches!(e, ServerEvent::NetworkStatus { text } if text == "peer 2: map transfer 11.6 MB")
+        ));
     }
 
     #[test]

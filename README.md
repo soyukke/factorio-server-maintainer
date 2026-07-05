@@ -1,25 +1,62 @@
-﻿# Factorio Server Maintainer
+# Factorio Server Maintainer
 
-Windows で Factorio 専用サーバーを 1 台管理するための GUI ツールです。
+Windows で Factorio 専用サーバーを管理するための GUI ツールです。
 
-## 主な機能
+SteamCMD でのサーバー取得、Space Age / Base の切り替え、セーブ選択、バックアップ、Mod Portal からの mod 追加、Tailscale などの共有アドレス管理、プレイヤー不在時の一時停止・自動停止をまとめて扱えます。
 
-- SteamCMD で Factorio をインストール / 更新 (`app_update 427520`)
-- `bin\x64\factorio.exe` を `--start-server` 付きで起動
-- セーブ zip が無ければ `<save_dir>\<world>.zip` を自動作成
-- GUI で既存セーブを選択、または新しいワールド名へ切り替え
-- `ctrlc-helper.exe` でまず正常停止し、タイムアウト後だけ強制終了
-- セーブ zip をコピーしてスナップショット作成、削除、ロールバック
-- Base / Space Age を `mods\mod-list.json` で明示管理
-- 公式 `auto_pause` で、誰もいないときのワールド進行を停止
-- GUI から共有用の公開アドレスを保存・コピー
+![Factorio Server Maintainer dashboard screenshot](docs/screenshots/dashboard.png)
+
+> スクリーンショットは README 用のダミー表示です。実ユーザー名、実パス、実IP、トークンは含めていません。
+
+## できること
+
+- SteamCMD で Factorio server をインストール / 更新
+- GUI からサーバー起動・正常停止
+- Base / Space Age の DLC プロファイル切り替え
+- 既存セーブの選択、新しいワールド名でのセーブ作成
+- セーブ zip のスナップショット作成、削除、ロールバック
+- Factorio 公式 `auto_pause` による無人時のワールド一時停止
+- 最後のプレイヤー退出後に、保存してからサーバーを自動停止
+- autosave 更新時のバックアップコピー
+- Mod Portal からの mod ダウンロードと有効化
+- Tailscale / playit.gg / グローバルIPなどの共有アドレス保存・コピー
+- 接続プレイヤー、peer状態、Tailscale ping / timeout などの簡易ネットワーク診断
+- gitleaks / fmt / lint / test を pre-commit で実行
+
+## クイックスタート
+
+必要なもの:
+
+- Windows
+- Rust toolchain
+- `mise`
+- `just`
+- `uvx` / `pre-commit`
+- Factorio を所有している Steam アカウント
+
+初回セットアップ:
+
+```powershell
+just setup
+```
+
+起動:
+
+```powershell
+just run
+```
+
+`just setup` は冪等です。すでに必要なファイルがある場合は再利用し、不足しているものだけ準備します。
 
 ## 既定の配置
 
-`just setup` はユーザーのホーム配下に隠しディレクトリ寄りのランタイム一式を作ります。
+ランタイムはユーザーディレクトリ直下の隠しディレクトリ風の場所に置きます。
 
 ```text
 %USERPROFILE%\.factorio-server-maintainer\
+|-- factorio-server-manager.exe
+|-- ctrlc-helper.exe
+|-- config.toml
 |-- SteamCMD\steamcmd.exe
 |-- Server\
 |   |-- bin\x64\factorio.exe
@@ -28,93 +65,84 @@ Windows で Factorio 専用サーバーを 1 台管理するための GUI ツー
 `-- Saves\<world>.zip
 ```
 
-バックアップは、ゲームごとに集約できる別ディレクトリへ保存します。
+バックアップはゲームごとに集約します。
 
 ```text
 %USERPROFILE%\.game-server-backups\
 `-- factorio\<world>\<timestamp>\
 ```
 
-`config.toml` 内のパスはすべて絶対パスです。
+`config.toml` には絶対パスが保存されます。Steam パスワードや Factorio service token は保存しません。
 
-## セットアップ
+## Steam / SteamCMD
 
-ローカルで動かせる状態まで冪等に準備します。通常は Steam ユーザー名なしで始めます。
+`just setup` はまず Steam クライアントのログイン履歴から Steam ユーザー名を検出します。
 
-```powershell
-just setup
-```
+SteamCMD がパスワードや Steam Guard code を要求する場合は、SteamCMD のコンソールで入力します。入力内容はこのツールの設定ファイルには保存されません。以後は SteamCMD 側のログインキャッシュを使います。
 
-`just setup` は Steam クライアントのログイン履歴から Steam ユーザー名を自動検出します。見つかった場合はそれを使って Factorio server を取得します。SteamCMD がパスワードと Steam Guard code を聞くことがあります。パスワードはこのアプリの `config.toml` には保存しません。保存するのは Steam ユーザー名だけです。以後は SteamCMD のログインキャッシュを使います。
-
-Steam ユーザー名が見つからない場合は anonymous 取得を試します。SteamCMD が `No subscription` などで拒否した場合は、その場で Steam ユーザー名を聞きます。
-
-このコマンドは次を行います。
-
-- `%USERPROFILE%\.factorio-server-maintainer` を作成
-- 旧 `%USERPROFILE%\FactorioServerMaintainer\SteamCMD` があれば SteamCMD を再利用
-- SteamCMD が無ければインストールし、あれば更新
-- `%USERPROFILE%\.game-server-backups\factorio` を作成
-- release バイナリをビルド
-- `factorio-server-manager.exe` と `ctrlc-helper.exe` をランタイムディレクトリへコピー
-- `config.toml` が無い場合だけ既定値で作成
-- Factorio server を SteamCMD で取得
-- Steam ユーザー名が必要になった場合は `manager.steam_username` を保存
-
-既定のサーバー名とパスワードは、ローカル初期セットアップ用に単純にしています。
-
-```text
-name: Factory
-password: factorio
-```
-
-セットアップ後は次で起動します。
+Steam ユーザー名を明示したい場合:
 
 ```powershell
-just run
+just steam-login your_steam_user
 ```
 
-## セーブデータの切り替え
+SteamCMD だけを bootstrap したい場合:
 
-GUI の「セーブデータ」欄で、保存フォルダ内の `*.zip` を一覧から選べます。
+```powershell
+just steamcmd-install
+```
 
-既存セーブで遊びたい場合:
+## サーバー起動と停止
+
+GUI の「サーバー操作」から起動・停止します。
+
+起動時にセーブ zip が無ければ、Factorio の `--create` で自動作成します。停止時は `ctrlc-helper.exe` で Ctrl+C を送り、Factorio に保存させてから終了します。タイムアウトした場合だけ強制終了します。
+
+## セーブ切り替え
+
+既存セーブで遊ぶ:
 
 1. サーバーを停止する
-2. 「既存セーブ」から遊びたいセーブを選ぶ
+2. 「セーブ」画面で既存の `*.zip` を選ぶ
 3. 「このセーブで保存」を押す
-4. アプリが再起動したら「サーバー起動」を押す
+4. アプリ再起動後にサーバーを起動する
 
-新しいワールドで始めたい場合:
+新しいワールドで始める:
 
 1. サーバーを停止する
 2. 「ワールド名」に新しい名前を入力する
 3. 「このセーブで保存」を押す
-4. アプリが再起動したら「サーバー起動」を押す
+4. 起動時に新しい `<world>.zip` が作成される
 
-新しいワールド名の zip がまだ無い場合、起動時に `<save_dir>\<world>.zip` を自動作成します。古いセーブ zip は削除しないので、後から一覧で選び直せます。
+古いセーブ zip は削除しません。あとから一覧で選び直せます。
 
-バックアップから戻したい場合は「バックアップ管理を開く…」から対象のスナップショットを選んでロールバックします。ロールバック前の現在状態は自動で退避されます。
+## バックアップ
+
+このツールのバックアップは、Factorio のセーブ zip をスナップショットとしてコピーします。
+
+- 手動スナップショット
+- autosave 更新時の自動コピー
+- ロールバック前の自動退避
+- スナップショット削除
+- スナップショットからのロールバック
+
+サーバー実行中の手動バックアップは避け、停止中または自動保存後のコピーを使います。
 
 ## 無人時のワールド進行
 
-Factorio には公式の `auto_pause` 設定があります。このツールでは既定で ON です。
+Factorio 公式の `auto_pause` を使います。既定では ON です。
 
 ```json
 "auto_pause": true
 ```
 
-ON の場合、プレイヤーが 0 人になるとサーバープロセスは起動したまま、ワールド時間は一時停止対象になります。工場、汚染、敵襲、資源消費を無人で進めたくない場合は ON のまま使ってください。
+ON の場合、プレイヤーが 0 人になるとサーバープロセスは残ったまま、ワールド進行が一時停止対象になります。工場、汚染、敵襲、資源消費を無人で進めたくない場合は ON のまま使います。
 
-この設定はサーバー起動時に `server-settings.json` として渡すため、変更の反映にはサーバー再起動が必要です。GUI の「ワールド進行」欄で、現在プレイヤーがいて進行中か、0 人で一時停止対象かを確認できます。
-
-さらに管理ツール側の「プレイヤーがいなくなったらサーバーを停止」を ON にすると、最後のプレイヤーが抜けてから既定 300 秒後に正常停止します。正常停止では Factorio に保存させてから終了し、その後にバックアップスナップショットを作成します。途中で誰かが戻ってきた場合は停止しません。
-
-Factorio の autosave は管理対象サーバーの `Server\UserData\saves\_autosave*.zip` に作られます。管理ツールはサーバー起動中、この autosave が更新されたらバックアップフォルダへ自動コピーします。つまり `save_interval` は Factorio の autosave 間隔であり、その autosave をバックアップとして集約する形です。
+さらに「プレイヤーがいなくなったらサーバーを停止」を ON にすると、最後のプレイヤーが抜けてから指定秒数後に正常停止します。停止前に誰かが戻ってきた場合は止めません。
 
 ## DLC モード
 
-`server.dlc` で Factorio の DLC プロファイルを選びます。
+`server.dlc` でプロファイルを選びます。
 
 ```toml
 [server]
@@ -128,98 +156,64 @@ dlc = "base"
 dlc = "space_age"
 ```
 
-`space_age` の場合、管理対象の `mods\mod-list.json` に以下の組み込み DLC mod を有効化して書き込みます。
+`space_age` の場合、管理対象の `mods\mod-list.json` に以下を有効化して書き込みます。
 
 - `elevated-rails`
 - `quality`
 - `space-age`
 
-起動時は `--mod-directory <server_dir>\mods` を渡すため、このプロファイルが安定して使われます。
+起動時は `--mod-directory <server_dir>\mods` を渡すため、Factorio クライアント側の設定に引きずられにくくなります。
 
 ## Mod 管理
 
-GUI の「Mod」欄で、Mod Portal から mod を追加できます。
-
-```text
-%USERPROFILE%\.factorio-server-maintainer\Server\mods
-```
-
-「Mod Portal名」に mod 名を入れて「Mod Portalから追加」を押すと、最新リリースをダウンロードしてこのフォルダへコピーします。ダウンロードには Factorio の `player-data.json` にある `service-username` / `service-token` を使います。トークンはこのツールの `config.toml` には保存しません。
-
-zip を手元に持っている場合は「mod zipを追加」から選べます。Factorio の mod zip は通常 `<mod-name>_<version>.zip` なので、コピー後に `<mod-name>` を検出し、「有効にするmod名」に自動追加します。
-
-有効化したい mod は「有効にするmod名」に 1 行ずつ書いて保存します。保存後、次回サーバー起動時に `mod-list.json` へ反映されます。自動追加された名前を消せば、その mod は無効扱いになります。
+GUI の「Mod」画面から、Mod Portal 名を指定して追加できます。
 
 ```text
 personal-respawn-anchor
 ```
 
-Gameplay mod はサーバーだけでは完結しません。参加者のクライアントにも同じ mod セットが必要です。Factorio は接続時に mod 同期を促しますが、最終的には参加者側にも mod が入ります。
+ダウンロードには Factorio の `player-data.json` にある `service-username` / `service-token` を使います。トークンは `config.toml` には保存しません。
 
-### Personal Respawn Anchor
+zip を手元に持っている場合は「mod zipを追加」から選べます。コピー後に mod 名を検出し、有効mod一覧へ追加します。
 
-`personal-respawn-anchor` は、マルチ向けの小さな自作 mod です。管理ツールには同梱せず、Mod Portal から取得します。
+Gameplay mod はサーバーだけでは完結しません。参加者のクライアントにも同じ mod セットが必要です。Factorio は接続時に mod 同期を促します。
 
-`respawn-beacon` は Factorio の `force`、つまり通常の協力マルチではチーム全体のスポーン地点を書き換える挙動でした。そのため、誰かがアンカーを置くと全員の復活地点が変わります。
+## Personal Respawn Anchor
 
-`personal-respawn-anchor` はその代わりに、プレイヤーごと・惑星ごとにアンカー位置を保存します。ゲーム本来のチームスポーン地点は変更せず、死亡後に復活した本人だけを自分のアンカーへ移動します。
+`personal-respawn-anchor` は、プレイヤーごと・惑星ごとに復活アンカーを持てる自作 mod です。管理ツールには同梱せず、Mod Portal から取得します。
 
-- 友達が置いたアンカーは友達用
-- 自分が置いたアンカーは自分用
-- 惑星ごとに別々のアンカーを持てる
-- アンカーを回収すると、そのプレイヤーのその惑星の登録だけ消える
-- マップには `<プレイヤー名> spawn` というタグを追加する
+- Mod Portal: <https://mods.factorio.com/mod/personal-respawn-anchor>
+- Source: <https://github.com/soyukke/personal-respawn-anchor>
 
-GUI の「Mod Portal名」に次を入れて追加します。
+古い `respawn-beacon` と同時に有効化すると挙動が混ざるため、どちらか片方だけを使います。
 
-```text
-personal-respawn-anchor
-```
+## ネットワーク診断
 
-サーバーに反映するには、GUI の「有効にするmod名」に `personal-respawn-anchor` を入れて保存し、サーバーを再起動します。古い `respawn-beacon` と同時に有効にすると挙動が混ざるため、どちらか片方だけを使ってください。
+GUI の「ネットワーク」欄では、Factorio ログと Tailscale から取れる範囲の診断を表示します。
 
-参加者は Factorio の接続時に mod 同期を促されます。
+- peer の接続状態
+- `DownloadingMap` / `TryingToCatchUp` / `InGame`
+- Tailscale の direct / relay
+- ping の最大値
+- timeout 回数
 
-`respawn-beacon` への敬意と独立実装であることは、mod側のクレジットに明記します。コード、画像、thumbnail はコピーしていません。
+Factorio のゲーム内プレイヤー別 ping そのものをサーバーから直接取ることはできません。かわりに、Tailscale ping と Factorio peer ログで「ネットワークが揺れているのか」「クライアント側が重いのか」を切り分けます。
 
-## SteamCMD
+## 開発
 
-SteamCMD は自己更新型なので、固定バージョンのツールではなく `just` タスクとして扱います。
-
-```powershell
-just steamcmd-install
-```
-
-GUI 側にも、設定された `steamcmd.exe` が無い場合の自動取得処理があります。GUI の Steam ユーザー名欄は Steam クライアントのログイン履歴から自動入力されます。必要なら手で変更して保存できます。ユーザー名が入っている場合、次の Install / Update では SteamCMD のコンソールが表示され、パスワードや Steam Guard code を入力できます。
-
-Steam ログインだけを後から明示的に行う場合:
-
-```powershell
-just steam-login your_steam_user
-```
-
-GUI の status summary には `SteamCMDログイン: anonymous` または Steam ユーザー名が表示されます。
-
-## ビルド
+ビルド:
 
 ```powershell
 just build
 ```
 
-release バイナリを作る場合:
+release:
 
 ```powershell
 just release
 ```
 
-出力:
-
-```text
-target\release\factorio-server-manager.exe
-target\release\ctrlc-helper.exe
-```
-
-## チェック
+チェック:
 
 ```powershell
 just precommit
@@ -227,20 +221,16 @@ just precommit
 
 実行内容:
 
-- `just secrets`
-- `just fmt`
-- `just lint`
-- `just test`
+- gitleaks
+- `cargo fmt --all --check`
+- `cargo clippy --workspace --all-targets -- -D warnings -D clippy::too_many_lines`
+- `cargo test --workspace`
 
-`just secrets` は gitleaks を `uvx pre-commit` 経由で全ファイルに実行します。`rustfmt` の幅は 100 です。Clippy は warning をエラーにし、関数 70 行ルールも有効です。GUI callback の長い配線だけは例外として許容しています。
-
-## pre-commit hook
+hook のインストール:
 
 ```powershell
 just hook-install
 ```
-
-hook はローカルと同じ `just` recipe を呼びます。
 
 ## コマンド一覧
 
@@ -248,4 +238,8 @@ hook はローカルと同じ `just` recipe を呼びます。
 just --list
 ```
 
-`mise run build` や `mise run test` などの mise タスクも残していますが、中身は対応する `just` recipe を呼ぶ薄い wrapper です。
+`mise run build` / `mise run test` / `mise run fmt` も残しています。中身は対応する `just` recipe を呼ぶ薄い wrapper です。
+
+## 注意
+
+このリポジトリは `Valheim_ServerMaintainer` を Factorio 向けに移植したものです。現在は Factorio 単体管理を前提にしています。
