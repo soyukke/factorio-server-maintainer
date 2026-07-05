@@ -31,6 +31,12 @@ export struct PlayerRow {
     joined_at: string,
 }
 
+export struct ActivityRow {
+    at: string,
+    player_name: string,
+    action: string,
+}
+
 export struct BackupRow {
     id: string,
     timestamp: string,
@@ -969,6 +975,7 @@ export component MainWindow inherits Window {
 
     // Players / Backups translation strings
     in property <string> t-group-players;
+    in property <string> t-group-activity;
     in property <string> t-group-network;
     in property <string> t-group-backup;
     in property <string> t-btn-refresh;
@@ -976,10 +983,13 @@ export component MainWindow inherits Window {
     in property <string> t-no-players;
     in property <string> t-no-backups;
     in-out property <string> players-count-text;
+    in-out property <string> world-proof-text: "";
+    in-out property <string> activity-summary-text: "";
     in-out property <string> network-status-text: "";
     in-out property <string> backups-count-text;
 
     in-out property <[PlayerRow]> player-rows;
+    in-out property <[ActivityRow]> activity-rows;
 
     // Save selection
     in property <string> t-group-saves;
@@ -1253,6 +1263,24 @@ export component MainWindow inherits Window {
                     Text {
                         text: root.player-rows.length == 0 ? root.t-no-players : root.players-count-text;
                         color: #cfd5db;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: root.world-proof-text;
+                        color: AppTheme.muted;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: root.t-group-activity;
+                        color: AppTheme.accent;
+                        font-size: 12px;
+                        font-weight: 700;
+                    }
+                    Text {
+                        text: root.activity-summary-text;
+                        color: #cfd5db;
+                        font-size: 11px;
                         wrap: word-wrap;
                     }
                     for row in root.player-rows : Rectangle {

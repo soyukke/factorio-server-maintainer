@@ -5,6 +5,7 @@
 mod translations;
 
 use anyhow::Context;
+use chrono::TimeZone;
 use factorio::{parse_network_status_line, FactorioServer};
 use gsm_core::{
     AppConfig, Backup, BackupId, BackupKind, FactorioDlc, GameServerManager, Language,
@@ -34,6 +35,10 @@ struct UiState {
     player_roster_observed: bool,
     /// Recent Factorio peer/network diagnostics shown in the players tab.
     network_lines: Vec<String>,
+    /// Recent join/leave activity, newest last.
+    activity: Vec<ActivityEntry>,
+    last_world_saved: Option<chrono::DateTime<chrono::Local>>,
+    last_log_at: Option<chrono::DateTime<chrono::Local>>,
     /// Last refresh from `list_backups`. Cached so we can rebuild row models
     /// after toggling sort / selection without going back to disk.
     last_backups: Vec<Backup>,
@@ -42,6 +47,29 @@ struct UiState {
     /// Sort column for the backup list: 0 = when, 1 = size.
     backup_sort_column: u8,
     backup_sort_desc: bool,
+}
+
+#[derive(Clone)]
+struct ActivityEntry {
+    at: chrono::DateTime<chrono::Local>,
+    player_name: String,
+    kind: ActivityKind,
+}
+
+#[derive(Clone, Copy)]
+enum ActivityKind {
+    Join,
+    Leave,
+}
+
+struct PlayerRenderContext<'a> {
+    status: ServerStatus,
+    auto_pause: bool,
+    last_world_saved: Option<chrono::DateTime<chrono::Local>>,
+    last_log_at: Option<chrono::DateTime<chrono::Local>>,
+    last_activity: Option<&'a ActivityEntry>,
+    language: Language,
+    strings: &'a Strings,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -84,6 +112,9 @@ fn main() -> anyhow::Result<()> {
         players: HashMap::new(),
         player_roster_observed: false,
         network_lines: Vec::new(),
+        activity: Vec::new(),
+        last_world_saved: None,
+        last_log_at: None,
         last_backups: Vec::new(),
         selected_backup_ids: HashSet::new(),
         backup_sort_column: 0,
@@ -358,6 +389,7 @@ fn apply_strings(ui: &MainWindow, t: &Strings) {
     ui.set_t_lbl_empty_stop_delay(t.lbl_empty_stop_delay.into());
 
     ui.set_t_group_players(t.group_players.into());
+    ui.set_t_group_activity(t.group_activity.into());
     ui.set_t_group_network(t.group_network.into());
     ui.set_t_group_backup(t.group_backup.into());
     ui.set_t_btn_refresh(t.btn_refresh.into());
@@ -590,6 +622,7 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
                         flags,
                         language,
                         players_update,
+                        activity_update,
                         network_update,
                         empty_stop_delay,
                     ) = {
@@ -605,15 +638,28 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
                             }
                         }
                         let mut roster_changed = false;
+                        let mut activity_changed = false;
                         let mut network_changed = false;
                         match &ev {
                             ServerEvent::PlayerJoined { name } => {
                                 guard.players.insert(name.clone(), chrono::Local::now());
                                 guard.player_roster_observed = true;
+                                push_activity(&mut guard.activity, name, ActivityKind::Join);
                                 roster_changed = true;
+                                activity_changed = true;
                             }
                             ServerEvent::PlayerLeft { name } => {
                                 guard.players.remove(name);
+                                push_activity(&mut guard.activity, name, ActivityKind::Leave);
+                                roster_changed = true;
+                                activity_changed = true;
+                            }
+                            ServerEvent::WorldSaved { at } => {
+                                guard.last_world_saved = Some(*at);
+                                roster_changed = true;
+                            }
+                            ServerEvent::Log(_) => {
+                                guard.last_log_at = Some(chrono::Local::now());
                                 roster_changed = true;
                             }
                             ServerEvent::StatusChanged(_) => {
@@ -642,10 +688,13 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
                         let players_update = if roster_changed {
                             Some(build_player_data(
                                 &guard.players,
-                                guard.last_status,
-                                config_auto_pause(&guard.config),
-                                t,
+                                player_render_context(&guard, t),
                             ))
+                        } else {
+                            None
+                        };
+                        let activity_update = if activity_changed {
+                            Some(build_activity_rows(&guard.activity, lang))
                         } else {
                             None
                         };
@@ -660,6 +709,7 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
                             flags,
                             lang,
                             players_update,
+                            activity_update,
                             network_update,
                             empty_stop_delay,
                         )
@@ -677,8 +727,19 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
                             ui.set_busy(busy);
                             ui.set_server_running(server_running);
                         }
-                        if let Some((rows, count_text, simulation_text)) = players_update {
-                            install_player_model(&ui, rows, count_text, simulation_text);
+                        if let Some((rows, count_text, simulation_text, proof_text)) =
+                            players_update
+                        {
+                            install_player_model(
+                                &ui,
+                                rows,
+                                count_text,
+                                simulation_text,
+                                proof_text,
+                            );
+                        }
+                        if let Some(rows) = activity_update {
+                            install_activity_model(&ui, rows);
                         }
                         if let Some(text) = network_update {
                             ui.set_network_status_text(text.into());
@@ -713,10 +774,8 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
 /// Vec in a Slint VecModel/ModelRc inside the UI thread (Rc is !Send).
 fn build_player_data(
     players: &HashMap<String, chrono::DateTime<chrono::Local>>,
-    status: ServerStatus,
-    auto_pause: bool,
-    t: &Strings,
-) -> (Vec<PlayerRow>, String, String) {
+    ctx: PlayerRenderContext<'_>,
+) -> (Vec<PlayerRow>, String, String, String) {
     let mut entries: Vec<(String, chrono::DateTime<chrono::Local>)> =
         players.iter().map(|(k, v)| (k.clone(), *v)).collect();
     entries.sort_by_key(|entry| entry.1);
@@ -727,9 +786,31 @@ fn build_player_data(
             joined_at: at.format("%H:%M:%S").to_string().into(),
         })
         .collect();
-    let count_text = translations::fmt_count(t.players_count_fmt, players.len());
-    let simulation_text = simulation_state_text(status, players.len(), auto_pause, t).to_string();
-    (rows, count_text, simulation_text)
+    let count_text = translations::fmt_count(ctx.strings.players_count_fmt, players.len());
+    let simulation_text =
+        simulation_state_text(ctx.status, players.len(), ctx.auto_pause, ctx.strings).to_string();
+    let proof_text = world_proof_text(
+        ctx.status,
+        players.len(),
+        ctx.auto_pause,
+        ctx.last_world_saved,
+        ctx.last_log_at,
+        ctx.last_activity,
+        ctx.language,
+    );
+    (rows, count_text, simulation_text, proof_text)
+}
+
+fn player_render_context<'a>(state: &'a UiState, strings: &'a Strings) -> PlayerRenderContext<'a> {
+    PlayerRenderContext {
+        status: state.last_status,
+        auto_pause: config_auto_pause(&state.config),
+        last_world_saved: state.last_world_saved,
+        last_log_at: state.last_log_at,
+        last_activity: state.activity.last(),
+        language: state.language,
+        strings,
+    }
 }
 
 fn install_player_model(
@@ -737,11 +818,150 @@ fn install_player_model(
     rows: Vec<PlayerRow>,
     count_text: String,
     simulation_text: String,
+    proof_text: String,
 ) {
     let model = std::rc::Rc::new(slint::VecModel::from(rows));
     ui.set_player_rows(slint::ModelRc::from(model));
     ui.set_players_count_text(count_text.into());
     ui.set_simulation_state_text(simulation_text.into());
+    ui.set_world_proof_text(proof_text.into());
+}
+
+fn push_activity(activity: &mut Vec<ActivityEntry>, name: &str, kind: ActivityKind) {
+    activity.push(ActivityEntry {
+        at: chrono::Local::now(),
+        player_name: name.to_string(),
+        kind,
+    });
+    trim_activity(activity);
+}
+
+fn trim_activity(activity: &mut Vec<ActivityEntry>) {
+    if activity.len() > 24 {
+        let overflow = activity.len() - 24;
+        activity.drain(..overflow);
+    }
+}
+
+fn build_activity_rows(activity: &[ActivityEntry], language: Language) -> Vec<ActivityRow> {
+    activity
+        .iter()
+        .rev()
+        .take(5)
+        .map(|entry| ActivityRow {
+            at: entry.at.format("%m/%d %H:%M").to_string().into(),
+            player_name: entry.player_name.clone().into(),
+            action: activity_label(entry.kind, language).into(),
+        })
+        .collect()
+}
+
+fn install_activity_model(ui: &MainWindow, rows: Vec<ActivityRow>) {
+    ui.set_activity_summary_text(activity_summary_from_rows(&rows).into());
+    let model = std::rc::Rc::new(slint::VecModel::from(rows));
+    ui.set_activity_rows(slint::ModelRc::from(model));
+}
+
+fn activity_summary_from_rows(rows: &[ActivityRow]) -> String {
+    if rows.is_empty() {
+        return "No join/leave history yet".to_string();
+    }
+    rows.iter()
+        .take(3)
+        .map(|row| format!("{} {} {}", row.at, row.action, row.player_name))
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
+fn activity_label(kind: ActivityKind, language: Language) -> &'static str {
+    match (kind, language) {
+        (ActivityKind::Join, Language::Ja) => "IN",
+        (ActivityKind::Leave, Language::Ja) => "OUT",
+        (ActivityKind::Join, Language::En) => "IN",
+        (ActivityKind::Leave, Language::En) => "OUT",
+    }
+}
+
+fn world_proof_text(
+    status: ServerStatus,
+    player_count: usize,
+    auto_pause: bool,
+    last_world_saved: Option<chrono::DateTime<chrono::Local>>,
+    last_log_at: Option<chrono::DateTime<chrono::Local>>,
+    last_activity: Option<&ActivityEntry>,
+    language: Language,
+) -> String {
+    let save = last_world_saved
+        .map(|at| match language {
+            Language::Ja => format!("最終保存 {}", at.format("%H:%M:%S")),
+            Language::En => format!("last save {}", at.format("%H:%M:%S")),
+        })
+        .unwrap_or_else(|| match language {
+            Language::Ja => "最終保存 不明".to_string(),
+            Language::En => "last save unknown".to_string(),
+        });
+    let activity = last_activity
+        .map(|entry| format_activity_summary(entry, language))
+        .unwrap_or_else(|| match language {
+            Language::Ja => "入退室履歴なし".to_string(),
+            Language::En => "no join/leave history yet".to_string(),
+        });
+    let log = last_log_at
+        .map(|at| match language {
+            Language::Ja => format!("最終ログ {}", at.format("%H:%M:%S")),
+            Language::En => format!("last log {}", at.format("%H:%M:%S")),
+        })
+        .unwrap_or_else(|| match language {
+            Language::Ja => "最終ログ 不明".to_string(),
+            Language::En => "last log unknown".to_string(),
+        });
+    match (
+        language,
+        status == ServerStatus::Running,
+        player_count,
+        auto_pause,
+    ) {
+        (Language::Ja, true, 0, true) => {
+            format!("0人・auto_pause ON: ワールド時間は停止対象です。{activity}; {save}; {log}.")
+        }
+        (Language::Ja, true, 0, false) => {
+            format!("0人・auto_pause OFF: ワールドは進み続けます。{activity}; {save}; {log}.")
+        }
+        (Language::Ja, true, count, _) => {
+            format!("{count}人接続中: ワールド進行中。{activity}; {save}; {log}.")
+        }
+        (Language::Ja, false, _, _) => {
+            format!("サーバープロセス停止中。{activity}; {save}; {log}.")
+        }
+        (Language::En, true, 0, true) => {
+            format!("No players, auto_pause ON: world should be paused. {activity}; {save}; {log}.")
+        }
+        (Language::En, true, 0, false) => {
+            format!(
+                "No players, auto_pause OFF: world can keep running. {activity}; {save}; {log}."
+            )
+        }
+        (Language::En, true, count, _) => {
+            format!("{count} player(s) online: world is running. {activity}; {save}; {log}.")
+        }
+        (Language::En, false, _, _) => {
+            format!("Server process is not running. {activity}; {save}; {log}.")
+        }
+    }
+}
+
+fn format_activity_summary(entry: &ActivityEntry, language: Language) -> String {
+    let verb = match (entry.kind, language) {
+        (ActivityKind::Join, Language::Ja) => "最終IN",
+        (ActivityKind::Leave, Language::Ja) => "最終OUT",
+        (ActivityKind::Join, Language::En) => "last in",
+        (ActivityKind::Leave, Language::En) => "last out",
+    };
+    format!(
+        "{verb} {} {}",
+        entry.player_name,
+        entry.at.format("%H:%M:%S")
+    )
 }
 
 fn apply_readme_screenshot_demo(ui: &MainWindow) {
@@ -873,6 +1093,31 @@ fn apply_readme_demo_players(ui: &MainWindow, language: Language) {
             Language::En => "Players connected: world is running",
         }
         .to_string(),
+        match language {
+            Language::Ja => "3人接続中: ワールド進行中。最終IN friend-beta 12:34:56; 最終保存 12:45:00; 最終ログ 12:45:00.",
+            Language::En => "3 player(s) online: world is running. last in friend-beta 12:34:56; last save 12:45:00; last log 12:45:00.",
+        }
+        .to_string(),
+    );
+    install_activity_model(
+        ui,
+        vec![
+            ActivityRow {
+                at: "07/06 12:34".into(),
+                action: "IN".into(),
+                player_name: "friend-beta".into(),
+            },
+            ActivityRow {
+                at: "07/06 12:12".into(),
+                action: "IN".into(),
+                player_name: "friend-alpha".into(),
+            },
+            ActivityRow {
+                at: "07/06 11:58".into(),
+                action: "OUT".into(),
+                player_name: "factory-admin".into(),
+            },
+        ],
     );
 }
 
@@ -885,6 +1130,8 @@ async fn restore_player_roster_from_log_async(
     let restored = match tokio::task::spawn_blocking(move || {
         Ok::<_, anyhow::Error>((
             restore_player_roster_from_log(&log_file)?,
+            restore_activity_from_log(&log_file),
+            file_modified_at(&network_log_file),
             restore_network_lines_from_log(&network_log_file),
         ))
     })
@@ -901,29 +1148,33 @@ async fn restore_player_roster_from_log_async(
         }
     };
 
-    let network_lines = restored.1;
-    let (rows, count_text, simulation_text, network_text) = {
+    let activity = restored.1;
+    let log_modified_at = restored.2;
+    let network_lines = restored.3;
+    let (rows, count_text, simulation_text, proof_text, activity_rows, network_text) = {
         let mut guard = state.lock().expect("state mutex poisoned");
         guard.players = restored.0;
+        guard.activity = activity;
+        guard.last_log_at = log_modified_at;
         guard.network_lines = network_lines;
         guard.player_roster_observed = true;
         let t = translations::for_language(guard.language);
-        let (rows, count_text, simulation_text) = build_player_data(
-            &guard.players,
-            guard.last_status,
-            config_auto_pause(&guard.config),
-            t,
-        );
+        let (rows, count_text, simulation_text, proof_text) =
+            build_player_data(&guard.players, player_render_context(&guard, t));
+        let activity_rows = build_activity_rows(&guard.activity, guard.language);
         (
             rows,
             count_text,
             simulation_text,
+            proof_text,
+            activity_rows,
             guard.network_lines.join("\n"),
         )
     };
 
     let _ = weak.upgrade_in_event_loop(move |ui| {
-        install_player_model(&ui, rows, count_text, simulation_text);
+        install_player_model(&ui, rows, count_text, simulation_text, proof_text);
+        install_activity_model(&ui, activity_rows);
         ui.set_network_status_text(network_text.into());
     });
 }
@@ -952,6 +1203,48 @@ fn restore_player_roster_from_text(text: &str) -> HashMap<String, chrono::DateTi
     }
 
     players
+}
+
+fn restore_activity_from_log(log_file: &Path) -> Vec<ActivityEntry> {
+    let Ok(text) = std::fs::read_to_string(log_file) else {
+        return Vec::new();
+    };
+    restore_activity_from_text(&text)
+}
+
+fn file_modified_at(path: &Path) -> Option<chrono::DateTime<chrono::Local>> {
+    std::fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()
+        .map(chrono::DateTime::<chrono::Local>::from)
+}
+
+fn restore_activity_from_text(text: &str) -> Vec<ActivityEntry> {
+    let mut activity = Vec::new();
+    for line in text.lines() {
+        if let Some(name) = parse_factorio_join_name(line) {
+            activity.push(ActivityEntry {
+                at: parse_manager_log_time(line).unwrap_or_else(chrono::Local::now),
+                player_name: name.to_string(),
+                kind: ActivityKind::Join,
+            });
+        } else if let Some(name) = parse_factorio_left_name(line) {
+            activity.push(ActivityEntry {
+                at: parse_manager_log_time(line).unwrap_or_else(chrono::Local::now),
+                player_name: name.to_string(),
+                kind: ActivityKind::Leave,
+            });
+        }
+        trim_activity(&mut activity);
+    }
+    activity
+}
+
+fn parse_manager_log_time(line: &str) -> Option<chrono::DateTime<chrono::Local>> {
+    let stamp = line.get(..19)?;
+    let naive = chrono::NaiveDateTime::parse_from_str(stamp, "%Y-%m-%d %H:%M:%S").ok()?;
+    chrono::Local.from_local_datetime(&naive).single()
 }
 
 fn restore_network_lines_from_log(log_file: &Path) -> Vec<String> {
@@ -2093,13 +2386,11 @@ fn wire_language_callback(
 
 fn rerender_players_for_language(ui: &MainWindow, state: &Arc<Mutex<UiState>>, t: &Strings) {
     let guard = state.lock().expect("state mutex poisoned");
-    let (rows, count_text, simulation_text) = build_player_data(
-        &guard.players,
-        guard.last_status,
-        config_auto_pause(&guard.config),
-        t,
-    );
-    install_player_model(ui, rows, count_text, simulation_text);
+    let (rows, count_text, simulation_text, proof_text) =
+        build_player_data(&guard.players, player_render_context(&guard, t));
+    let activity_rows = build_activity_rows(&guard.activity, guard.language);
+    install_player_model(ui, rows, count_text, simulation_text, proof_text);
+    install_activity_model(ui, activity_rows);
 }
 
 fn pick_for_key(key: &str, current: &str) -> Option<PathBuf> {
@@ -2256,5 +2547,24 @@ Hosting game at IP ADDR
         let roster = restore_player_roster_from_text(text);
         assert!(!roster.contains_key("alice"));
         assert!(roster.contains_key("bob"));
+    }
+
+    #[test]
+    fn restores_recent_activity_from_manager_log() {
+        let text = "\
+2026-07-04 07:18:41 [JOIN] alice joined the game
+2026-07-04 07:19:28 [JOIN] bob joined the game
+2026-07-04 07:21:10 [LEAVE] alice left the game
+";
+        let rows = restore_activity_from_text(text);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].player_name, "alice");
+        assert!(matches!(rows[0].kind, ActivityKind::Join));
+        assert_eq!(rows[2].player_name, "alice");
+        assert!(matches!(rows[2].kind, ActivityKind::Leave));
+        assert_eq!(
+            rows[2].at.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2026-07-04 07:21:10"
+        );
     }
 }
