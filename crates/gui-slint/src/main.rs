@@ -694,7 +694,7 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
                             None
                         };
                         let activity_update = if activity_changed {
-                            Some(build_activity_rows(&guard.activity, lang))
+                            Some(build_activity_rows(&guard.activity, &guard.players, lang))
                         } else {
                             None
                         };
@@ -843,17 +843,12 @@ fn trim_activity(activity: &mut Vec<ActivityEntry>) {
     }
 }
 
-fn build_activity_rows(activity: &[ActivityEntry], language: Language) -> Vec<ActivityRow> {
-    activity
-        .iter()
-        .rev()
-        .take(5)
-        .map(|entry| ActivityRow {
-            at: entry.at.format("%m/%d %H:%M").to_string().into(),
-            player_name: entry.player_name.clone().into(),
-            action: activity_label(entry.kind, language).into(),
-        })
-        .collect()
+fn build_activity_rows(
+    activity: &[ActivityEntry],
+    players: &HashMap<String, chrono::DateTime<chrono::Local>>,
+    language: Language,
+) -> Vec<ActivityRow> {
+    activity_by_player(activity, players, language)
 }
 
 fn install_activity_model(ui: &MainWindow, rows: Vec<ActivityRow>) {
@@ -868,17 +863,75 @@ fn activity_summary_from_rows(rows: &[ActivityRow]) -> String {
     }
     rows.iter()
         .take(3)
-        .map(|row| format!("{} {} {}", row.at, row.action, row.player_name))
+        .map(|row| format!("{}: {} ({})", row.player_name, row.action, row.at))
         .collect::<Vec<_>>()
         .join(" / ")
 }
 
-fn activity_label(kind: ActivityKind, language: Language) -> &'static str {
-    match (kind, language) {
-        (ActivityKind::Join, Language::Ja) => "IN",
-        (ActivityKind::Leave, Language::Ja) => "OUT",
-        (ActivityKind::Join, Language::En) => "IN",
-        (ActivityKind::Leave, Language::En) => "OUT",
+fn activity_by_player(
+    activity: &[ActivityEntry],
+    players: &HashMap<String, chrono::DateTime<chrono::Local>>,
+    language: Language,
+) -> Vec<ActivityRow> {
+    let mut by_name: HashMap<String, PlayerActivity> = HashMap::new();
+    for entry in activity {
+        let row = by_name.entry(entry.player_name.clone()).or_default();
+        row.latest = Some(row.latest.map_or(entry.at, |at| at.max(entry.at)));
+        match entry.kind {
+            ActivityKind::Join => row.last_in = Some(entry.at),
+            ActivityKind::Leave => row.last_out = Some(entry.at),
+        }
+    }
+
+    let mut entries: Vec<(String, PlayerActivity)> = by_name.into_iter().collect();
+    entries.sort_by_key(|(_, activity)| std::cmp::Reverse(activity.latest));
+    entries
+        .into_iter()
+        .take(6)
+        .map(|(name, activity)| {
+            let online = players.contains_key(&name);
+            ActivityRow {
+                at: player_activity_times(&activity, language).into(),
+                player_name: name.into(),
+                action: online_label(online, language).into(),
+            }
+        })
+        .collect()
+}
+
+#[derive(Default)]
+struct PlayerActivity {
+    latest: Option<chrono::DateTime<chrono::Local>>,
+    last_in: Option<chrono::DateTime<chrono::Local>>,
+    last_out: Option<chrono::DateTime<chrono::Local>>,
+}
+
+fn player_activity_times(activity: &PlayerActivity, language: Language) -> String {
+    let in_label = match language {
+        Language::Ja => "IN",
+        Language::En => "IN",
+    };
+    let out_label = match language {
+        Language::Ja => "OUT",
+        Language::En => "OUT",
+    };
+    let last_in = format_optional_time(activity.last_in);
+    let last_out = format_optional_time(activity.last_out);
+    format!("{in_label} {last_in} / {out_label} {last_out}")
+}
+
+fn format_optional_time(value: Option<chrono::DateTime<chrono::Local>>) -> String {
+    value
+        .map(|at| at.format("%m/%d %H:%M").to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn online_label(online: bool, language: Language) -> &'static str {
+    match (online, language) {
+        (true, Language::Ja) => "オンライン",
+        (false, Language::Ja) => "オフライン",
+        (true, Language::En) => "Online",
+        (false, Language::En) => "Offline",
     }
 }
 
@@ -1103,18 +1156,18 @@ fn apply_readme_demo_players(ui: &MainWindow, language: Language) {
         ui,
         vec![
             ActivityRow {
-                at: "07/06 12:34".into(),
-                action: "IN".into(),
+                at: "IN 07/06 12:34 / OUT -".into(),
+                action: "オンライン".into(),
                 player_name: "friend-beta".into(),
             },
             ActivityRow {
-                at: "07/06 12:12".into(),
-                action: "IN".into(),
+                at: "IN 07/06 12:12 / OUT -".into(),
+                action: "オンライン".into(),
                 player_name: "friend-alpha".into(),
             },
             ActivityRow {
-                at: "07/06 11:58".into(),
-                action: "OUT".into(),
+                at: "IN 07/06 11:02 / OUT 07/06 11:58".into(),
+                action: "オフライン".into(),
                 player_name: "factory-admin".into(),
             },
         ],
@@ -1161,7 +1214,7 @@ async fn restore_player_roster_from_log_async(
         let t = translations::for_language(guard.language);
         let (rows, count_text, simulation_text, proof_text) =
             build_player_data(&guard.players, player_render_context(&guard, t));
-        let activity_rows = build_activity_rows(&guard.activity, guard.language);
+        let activity_rows = build_activity_rows(&guard.activity, &guard.players, guard.language);
         (
             rows,
             count_text,
@@ -2388,7 +2441,7 @@ fn rerender_players_for_language(ui: &MainWindow, state: &Arc<Mutex<UiState>>, t
     let guard = state.lock().expect("state mutex poisoned");
     let (rows, count_text, simulation_text, proof_text) =
         build_player_data(&guard.players, player_render_context(&guard, t));
-    let activity_rows = build_activity_rows(&guard.activity, guard.language);
+    let activity_rows = build_activity_rows(&guard.activity, &guard.players, guard.language);
     install_player_model(ui, rows, count_text, simulation_text, proof_text);
     install_activity_model(ui, activity_rows);
 }
@@ -2566,5 +2619,25 @@ Hosting game at IP ADDR
             rows[2].at.format("%Y-%m-%d %H:%M:%S").to_string(),
             "2026-07-04 07:21:10"
         );
+    }
+
+    #[test]
+    fn groups_activity_by_player() {
+        let text = "\
+2026-07-04 07:18:41 [JOIN] alice joined the game
+2026-07-04 07:19:28 [JOIN] bob joined the game
+2026-07-04 07:21:10 [LEAVE] alice left the game
+";
+        let activity = restore_activity_from_text(text);
+        let mut online = HashMap::new();
+        online.insert("bob".to_string(), chrono::Local::now());
+        let rows = build_activity_rows(&activity, &online, Language::En);
+        let alice = rows.iter().find(|row| row.player_name == "alice").unwrap();
+        let bob = rows.iter().find(|row| row.player_name == "bob").unwrap();
+        assert_eq!(alice.action, "Offline");
+        assert!(alice.at.contains("IN 07/04 07:18"));
+        assert!(alice.at.contains("OUT 07/04 07:21"));
+        assert_eq!(bob.action, "Online");
+        assert!(bob.at.contains("IN 07/04 07:19"));
     }
 }

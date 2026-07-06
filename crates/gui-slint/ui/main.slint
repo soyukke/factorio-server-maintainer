@@ -1283,6 +1283,35 @@ export component MainWindow inherits Window {
                         font-size: 11px;
                         wrap: word-wrap;
                     }
+                    for row in root.activity-rows : Rectangle {
+                        background: #181b1e;
+                        border-radius: 3px;
+                        height: 26px;
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 6px;
+                            spacing: 8px;
+                            Text {
+                                text: row.player_name;
+                                color: #cfd5db;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: row.action;
+                                color: AppTheme.header-fg;
+                                vertical-alignment: center;
+                                width: 80px;
+                            }
+                            Text {
+                                text: row.at;
+                                color: #7c8a93;
+                                vertical-alignment: center;
+                                width: 190px;
+                            }
+                        }
+                    }
                     for row in root.player-rows : Rectangle {
                         background: #1a242c;
                         border-radius: 3px;
