@@ -409,6 +409,7 @@ fn apply_backup_window_strings(bw: &BackupWindow, t: &Strings) {
     bw.set_t_backup_title(t.backup_window_title.into());
     bw.set_t_sidebar_paths(t.backup_sidebar_paths.into());
     bw.set_t_sidebar_list(t.backup_sidebar_list.into());
+    bw.set_t_tab_auto(t.backup_tab_auto.into());
     bw.set_t_tab_manual(t.backup_tab_manual.into());
     bw.set_t_tab_pre_rollback(t.backup_tab_pre_rollback.into());
     bw.set_t_col_when(t.backup_col_when.into());
@@ -1737,10 +1738,10 @@ fn backup_kind_to_int(k: BackupKind) -> i32 {
 }
 
 fn subtab_to_kind(subtab: i32) -> BackupKind {
-    if subtab == 1 {
-        BackupKind::PreRollback
-    } else {
-        BackupKind::Manual
+    match subtab {
+        1 => BackupKind::Manual,
+        2 => BackupKind::PreRollback,
+        _ => BackupKind::Auto,
     }
 }
 
@@ -1835,7 +1836,7 @@ fn wire_backup_callbacks(
             };
             let kind_filter = subtab_to_kind(kind_int);
             // Read the visible row's id from state (filtered + sorted view).
-            let (selected_set_after, manual_count, pre_count) = {
+            let (selected_set_after, auto_count, manual_count, pre_count) = {
                 let mut guard = state.lock().expect("state mutex poisoned");
                 let view: Vec<&Backup> = guard
                     .last_backups
@@ -1851,15 +1852,17 @@ fn wire_backup_callbacks(
                 } else {
                     guard.selected_backup_ids.insert(target_id);
                 }
+                let auto_count = count_selected_for(&guard, BackupKind::Auto);
                 let manual_count = count_selected_for(&guard, BackupKind::Manual);
                 let pre_count = count_selected_for(&guard, BackupKind::PreRollback);
                 let selected = guard.selected_backup_ids.clone();
-                (selected, manual_count, pre_count)
+                (selected, auto_count, manual_count, pre_count)
             };
             // Rebuild both lists (selection state affects checkbox display).
-            let (manual_rows, pre_rollback_rows) = {
+            let (auto_rows, manual_rows, pre_rollback_rows) = {
                 let guard = state.lock().expect("state mutex poisoned");
                 (
+                    backups_to_rows(&guard.last_backups, BackupKind::Auto, &selected_set_after),
                     backups_to_rows(&guard.last_backups, BackupKind::Manual, &selected_set_after),
                     backups_to_rows(
                         &guard.last_backups,
@@ -1868,7 +1871,8 @@ fn wire_backup_callbacks(
                     ),
                 )
             };
-            install_backup_models(&bw, manual_rows, pre_rollback_rows);
+            install_backup_models(&bw, auto_rows, manual_rows, pre_rollback_rows);
+            bw.set_auto_selected_count(auto_count as i32);
             bw.set_manual_selected_count(manual_count as i32);
             bw.set_pre_rollback_selected_count(pre_count as i32);
         });
@@ -1883,7 +1887,7 @@ fn wire_backup_callbacks(
                 None => return,
             };
             let column_u = if column == 1 { 1u8 } else { 0u8 };
-            let (manual_rows, pre_rollback_rows, sort_col, sort_desc) = {
+            let (auto_rows, manual_rows, pre_rollback_rows, sort_col, sort_desc) = {
                 let mut guard = state.lock().expect("state mutex poisoned");
                 if guard.backup_sort_column == column_u {
                     guard.backup_sort_desc = !guard.backup_sort_desc;
@@ -1895,11 +1899,12 @@ fn wire_backup_callbacks(
                 let desc = guard.backup_sort_desc;
                 sort_backups_inplace(&mut guard.last_backups, col, desc);
                 let selected = guard.selected_backup_ids.clone();
+                let auto = backups_to_rows(&guard.last_backups, BackupKind::Auto, &selected);
                 let manual = backups_to_rows(&guard.last_backups, BackupKind::Manual, &selected);
                 let pre = backups_to_rows(&guard.last_backups, BackupKind::PreRollback, &selected);
-                (manual, pre, col, desc)
+                (auto, manual, pre, col, desc)
             };
-            install_backup_models(&bw, manual_rows, pre_rollback_rows);
+            install_backup_models(&bw, auto_rows, manual_rows, pre_rollback_rows);
             bw.set_sort_column(sort_col as i32);
             bw.set_sort_desc(sort_desc);
         });
@@ -1982,9 +1987,16 @@ fn count_selected_for(state: &UiState, kind: BackupKind) -> usize {
         .count()
 }
 
-fn install_backup_models(bw: &BackupWindow, manual: Vec<BackupRow>, pre_rollback: Vec<BackupRow>) {
+fn install_backup_models(
+    bw: &BackupWindow,
+    auto: Vec<BackupRow>,
+    manual: Vec<BackupRow>,
+    pre_rollback: Vec<BackupRow>,
+) {
+    let auto_model = std::rc::Rc::new(slint::VecModel::from(auto));
     let manual_model = std::rc::Rc::new(slint::VecModel::from(manual));
     let pre_rollback_model = std::rc::Rc::new(slint::VecModel::from(pre_rollback));
+    bw.set_snapshots_auto(slint::ModelRc::from(auto_model));
     bw.set_snapshots_manual(slint::ModelRc::from(manual_model));
     bw.set_snapshots_pre_rollback(slint::ModelRc::from(pre_rollback_model));
 }
@@ -2166,6 +2178,49 @@ fn is_tailscale_ipv4(value: &str) -> bool {
     value.starts_with("100.") && value.parse::<std::net::Ipv4Addr>().is_ok()
 }
 
+struct BackupViewData {
+    auto_rows: Vec<BackupRow>,
+    manual_rows: Vec<BackupRow>,
+    pre_rollback_rows: Vec<BackupRow>,
+    auto_count: usize,
+    manual_count: usize,
+    pre_count: usize,
+    count_text: String,
+}
+
+fn prepare_backup_view(backups: &mut [Backup], state: &Arc<Mutex<UiState>>) -> BackupViewData {
+    let mut guard = state.lock().expect("state mutex poisoned");
+    sort_backups_inplace(backups, guard.backup_sort_column, guard.backup_sort_desc);
+
+    let live: HashSet<String> = backups.iter().map(|b| b.id.0.clone()).collect();
+    guard.selected_backup_ids.retain(|id| live.contains(id));
+    guard.last_backups = backups.to_vec();
+
+    let selected = &guard.selected_backup_ids;
+    let auto_rows = backups_to_rows(backups, BackupKind::Auto, selected);
+    let manual_rows = backups_to_rows(backups, BackupKind::Manual, selected);
+    let pre_rollback_rows = backups_to_rows(backups, BackupKind::PreRollback, selected);
+    let auto_count = count_selected_for(&guard, BackupKind::Auto);
+    let manual_count = count_selected_for(&guard, BackupKind::Manual);
+    let pre_count = count_selected_for(&guard, BackupKind::PreRollback);
+    let t = translations::for_language(guard.language);
+    let count_text = if backups.is_empty() {
+        t.no_backups.to_string()
+    } else {
+        translations::fmt_count(t.backups_count_fmt, backups.len())
+    };
+
+    BackupViewData {
+        auto_rows,
+        manual_rows,
+        pre_rollback_rows,
+        auto_count,
+        manual_count,
+        pre_count,
+        count_text,
+    }
+}
+
 async fn refresh_backups_async(
     server: &Arc<FactorioServer>,
     state: &Arc<Mutex<UiState>>,
@@ -2180,53 +2235,20 @@ async fn refresh_backups_async(
         }
     };
 
-    let (manual_rows, pre_rollback_rows, manual_count, pre_count, count_text, total) = {
-        let mut guard = state.lock().expect("state mutex poisoned");
-        // Apply current sort order.
-        sort_backups_inplace(
-            &mut backups,
-            guard.backup_sort_column,
-            guard.backup_sort_desc,
-        );
-
-        // Drop selections that no longer correspond to live snapshots.
-        let live: HashSet<String> = backups.iter().map(|b| b.id.0.clone()).collect();
-        guard.selected_backup_ids.retain(|id| live.contains(id));
-
-        guard.last_backups = backups.clone();
-
-        let manual = backups_to_rows(&backups, BackupKind::Manual, &guard.selected_backup_ids);
-        let pre = backups_to_rows(
-            &backups,
-            BackupKind::PreRollback,
-            &guard.selected_backup_ids,
-        );
-        let manual_count = count_selected_for(&guard, BackupKind::Manual);
-        let pre_count = count_selected_for(&guard, BackupKind::PreRollback);
-        let t = translations::for_language(guard.language);
-        let count_text = if backups.is_empty() {
-            t.no_backups.to_string()
-        } else {
-            translations::fmt_count(t.backups_count_fmt, backups.len())
-        };
-        (
-            manual,
-            pre,
-            manual_count,
-            pre_count,
-            count_text,
-            backups.len(),
-        )
-    };
-    let _ = total;
+    let view = prepare_backup_view(&mut backups, state);
 
     // Push to BackupWindow.
     {
         let bw = backup_weak.clone();
-        let manual = manual_rows;
-        let pre = pre_rollback_rows;
+        let auto = view.auto_rows;
+        let manual = view.manual_rows;
+        let pre = view.pre_rollback_rows;
+        let auto_count = view.auto_count;
+        let manual_count = view.manual_count;
+        let pre_count = view.pre_count;
         let _ = bw.upgrade_in_event_loop(move |bw| {
-            install_backup_models(&bw, manual, pre);
+            install_backup_models(&bw, auto, manual, pre);
+            bw.set_auto_selected_count(auto_count as i32);
             bw.set_manual_selected_count(manual_count as i32);
             bw.set_pre_rollback_selected_count(pre_count as i32);
         });
@@ -2235,6 +2257,7 @@ async fn refresh_backups_async(
     // Push count text to MainWindow.
     {
         let main = main_weak.clone();
+        let count_text = view.count_text;
         let _ = main.upgrade_in_event_loop(move |ui| {
             ui.set_backups_count_text(count_text.into());
         });

@@ -482,6 +482,7 @@ export component BackupWindow inherits Window {
     in property <string> t-backup-title;
     in property <string> t-sidebar-paths;
     in property <string> t-sidebar-list;
+    in property <string> t-tab-auto;
     in property <string> t-tab-manual;
     in property <string> t-tab-pre-rollback;
     in property <string> t-col-when;
@@ -506,14 +507,16 @@ export component BackupWindow inherits Window {
     in property <string> backup-dir-display;
 
     // 笏笏 Data lists 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
+    in property <[BackupRow]> snapshots-auto: [];
     in property <[BackupRow]> snapshots-manual: [];
     in property <[BackupRow]> snapshots-pre-rollback: [];
+    in property <int> auto-selected-count: 0;
     in property <int> manual-selected-count: 0;
     in property <int> pre-rollback-selected-count: 0;
 
     // 笏笏 UI state 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
     in-out property <int> current-category: 1;       // 0=Paths, 1=List
-    in-out property <int> current-subtab: 0;          // 0=Manual, 1=PreRollback
+    in-out property <int> current-subtab: 0;          // 0=Auto, 1=Manual, 2=PreRollback
     in-out property <int> sort-column: 0;             // 0=when, 1=size
     in-out property <bool> sort-desc: true;
     in-out property <string> pending-rollback-id: "";
@@ -615,12 +618,12 @@ export component BackupWindow inherits Window {
                             background: root.current-subtab == 0 ? AppTheme.accent : AppTheme.accent-soft;
                             border-radius: 4px;
                             height: 28px;
-                            min-width: 120px;
+                            min-width: 96px;
                             HorizontalBox {
                                 padding-left: 12px;
                                 padding-right: 12px;
                                 Text {
-                                    text: root.t-tab-manual;
+                                    text: root.t-tab-auto;
                                     color: root.current-subtab == 0 ? AppTheme.on-accent : Palette.foreground;
                                     font-weight: root.current-subtab == 0 ? 700 : 400;
                                     vertical-alignment: center;
@@ -632,12 +635,12 @@ export component BackupWindow inherits Window {
                             background: root.current-subtab == 1 ? AppTheme.accent : AppTheme.accent-soft;
                             border-radius: 4px;
                             height: 28px;
-                            min-width: 140px;
+                            min-width: 96px;
                             HorizontalBox {
                                 padding-left: 12px;
                                 padding-right: 12px;
                                 Text {
-                                    text: root.t-tab-pre-rollback;
+                                    text: root.t-tab-manual;
                                     color: root.current-subtab == 1 ? AppTheme.on-accent : Palette.foreground;
                                     font-weight: root.current-subtab == 1 ? 700 : 400;
                                     vertical-alignment: center;
@@ -645,11 +648,28 @@ export component BackupWindow inherits Window {
                             }
                             TouchArea { clicked => { root.current-subtab = 1; } }
                         }
+                        Rectangle {
+                            background: root.current-subtab == 2 ? AppTheme.accent : AppTheme.accent-soft;
+                            border-radius: 4px;
+                            height: 28px;
+                            min-width: 140px;
+                            HorizontalBox {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                Text {
+                                    text: root.t-tab-pre-rollback;
+                                    color: root.current-subtab == 2 ? AppTheme.on-accent : Palette.foreground;
+                                    font-weight: root.current-subtab == 2 ? 700 : 400;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            TouchArea { clicked => { root.current-subtab = 2; } }
+                        }
                         Rectangle { horizontal-stretch: 1; }
                         Button {
                             text: root.t-btn-take-snapshot;
                             primary: true;
-                            enabled: root.server-controls-enabled && !root.busy && root.current-subtab == 0;
+                            enabled: root.server-controls-enabled && !root.busy && root.current-subtab == 1;
                             clicked => { root.take-snapshot-clicked(); }
                         }
                         Button {
@@ -707,11 +727,11 @@ export component BackupWindow inherits Window {
                         VerticalBox {
                             padding: 0;
                             spacing: 1px;
-                            // Manual list rows (rendered only when subtab=0)
+                            // Auto list rows (rendered only when subtab=0)
                             if root.current-subtab == 0: VerticalBox {
                                 padding: 0;
                                 spacing: 1px;
-                                for row[idx] in root.snapshots-manual: Rectangle {
+                                for row[idx] in root.snapshots-auto: Rectangle {
                                     background: row.selected ? AppTheme.accent-soft : Palette.alternate-background;
                                     border-radius: 3px;
                                     height: 32px;
@@ -749,6 +769,58 @@ export component BackupWindow inherits Window {
                                         }
                                     }
                                 }
+                                if root.snapshots-auto.length == 0: Rectangle {
+                                    height: 60px;
+                                    Text {
+                                        text: root.t-no-backups;
+                                        color: #7c8a93;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                            // Manual list rows
+                            if root.current-subtab == 1: VerticalBox {
+                                padding: 0;
+                                spacing: 1px;
+                                for row[idx] in root.snapshots-manual: Rectangle {
+                                    background: row.selected ? AppTheme.accent-soft : Palette.alternate-background;
+                                    border-radius: 3px;
+                                    height: 32px;
+                                    HorizontalBox {
+                                        spacing: 6px;
+                                        padding: 2px;
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        CheckBox {
+                                            checked: row.selected;
+                                            width: 30px;
+                                            toggled => { root.toggle-row-selected(1, idx); }
+                                        }
+                                        Text {
+                                            text: row.timestamp;
+                                            color: Palette.foreground;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 2;
+                                            font-size: 12px;
+                                        }
+                                        Text {
+                                            text: row.size;
+                                            color: #7c8a93;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            font-size: 12px;
+                                        }
+                                        Button {
+                                            text: root.t-btn-rollback;
+                                            enabled: root.server-controls-enabled && !root.busy;
+                                            clicked => {
+                                                root.pending-rollback-id = row.id;
+                                                root.pending-rollback-when = row.timestamp;
+                                            }
+                                        }
+                                    }
+                                }
                                 if root.snapshots-manual.length == 0: Rectangle {
                                     height: 60px;
                                     Text {
@@ -760,7 +832,7 @@ export component BackupWindow inherits Window {
                                 }
                             }
                             // PreRollback list rows
-                            if root.current-subtab == 1: VerticalBox {
+                            if root.current-subtab == 2: VerticalBox {
                                 padding: 0;
                                 spacing: 1px;
                                 for row[idx] in root.snapshots-pre-rollback: Rectangle {
@@ -775,7 +847,7 @@ export component BackupWindow inherits Window {
                                         CheckBox {
                                             checked: row.selected;
                                             width: 30px;
-                                            toggled => { root.toggle-row-selected(1, idx); }
+                                            toggled => { root.toggle-row-selected(2, idx); }
                                         }
                                         Text {
                                             text: row.timestamp;
@@ -890,8 +962,10 @@ export component BackupWindow inherits Window {
                 enabled: !root.busy
                     && root.current-category == 1
                     && (root.current-subtab == 0
-                            ? root.manual-selected-count > 0
-                            : root.pre-rollback-selected-count > 0);
+                            ? root.auto-selected-count > 0
+                            : (root.current-subtab == 1
+                                ? root.manual-selected-count > 0
+                                : root.pre-rollback-selected-count > 0));
                 clicked => {
                     root.request-delete-selected(root.current-subtab);
                 }
