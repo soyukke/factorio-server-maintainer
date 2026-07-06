@@ -192,7 +192,7 @@ impl FactorioServer {
             "require_user_verification": true,
             "max_upload_in_kilobytes_per_second": 0,
             "max_upload_slots": 5,
-            "minimum_latency_in_ticks": 0,
+            "minimum_latency_in_ticks": 6,
             "max_heartbeats_per_second": 60,
             "ignore_player_limit_for_returning_players": false,
             "allow_commands": "admins-only",
