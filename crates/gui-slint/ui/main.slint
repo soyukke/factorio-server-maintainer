@@ -53,6 +53,7 @@ component Section inherits VerticalBox {
     in property <string> title;
     spacing: 0;
     padding: 0;
+    vertical-stretch: 0;
 
     Rectangle {
         height: 28px;
@@ -78,6 +79,7 @@ component Section inherits VerticalBox {
     }
     Rectangle {
         background: AppTheme.surface;
+        vertical-stretch: 0;
         border-bottom-left-radius: 6px;
         border-bottom-right-radius: 6px;
         border-color: AppTheme.border;
@@ -906,10 +908,10 @@ export component BackupWindow inherits Window {
 export component MainWindow inherits Window {
     title: "Factorio Server Manager";
     icon: @image-url("../../../assets/icon.png");
-    preferred-width: 980px;
-    preferred-height: 760px;
-    min-width: 820px;
-    min-height: 560px;
+    preferred-width: 1280px;
+    preferred-height: 1250px;
+    min-width: 1280px;
+    min-height: 1250px;
     background: #0e0f10;
 
     // Note: std-widgets follow the OS color scheme automatically (fluent
@@ -1081,6 +1083,7 @@ export component MainWindow inherits Window {
 
         Section {
             title: root.t-group-status;
+            height: 160px;
             HorizontalBox {
                 spacing: 12px;
                 VerticalBox {
@@ -1091,7 +1094,8 @@ export component MainWindow inherits Window {
                         color: AppTheme.text;
                         font-size: 16px;
                         font-weight: 700;
-                        wrap: word-wrap;
+                        height: 44px;
+                        overflow: elide;
                     }
                     HorizontalLayout {
                         spacing: 8px;
@@ -1120,6 +1124,7 @@ export component MainWindow inherits Window {
                         color: root.factorio-ready ? AppTheme.ok : AppTheme.warn;
                         font-size: 12px;
                         wrap: word-wrap;
+                        overflow: elide;
                     }
                 }
                 Rectangle {
@@ -1164,7 +1169,8 @@ export component MainWindow inherits Window {
         }
 
         HorizontalBox {
-            vertical-stretch: 1;
+            vertical-stretch: 0;
+            height: 560px;
             spacing: 10px;
 
             Rectangle {
@@ -1208,6 +1214,7 @@ export component MainWindow inherits Window {
                 Section {
                     title: root.t-group-connection;
                     horizontal-stretch: 1;
+                    height: 150px;
                     HorizontalLayout {
                         spacing: 8px;
                         Text {
@@ -1237,7 +1244,8 @@ export component MainWindow inherits Window {
                             : root.t-public-address-hint;
                         color: root.public-address-status != "" ? AppTheme.accent : #7c8a93;
                         font-size: 11px;
-                        wrap: word-wrap;
+                        height: 18px;
+                        overflow: elide;
                     }
                     HorizontalLayout {
                         spacing: 8px;
@@ -1257,91 +1265,75 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                Section {
-                    title: root.t-group-players;
-                    horizontal-stretch: 1;
-                    Text {
-                        text: root.player-rows.length == 0 ? root.t-no-players : root.players-count-text;
-                        color: #cfd5db;
-                        wrap: word-wrap;
-                    }
-                    Text {
-                        text: root.world-proof-text;
-                        color: AppTheme.muted;
-                        font-size: 11px;
-                        wrap: word-wrap;
-                    }
-                    Text {
-                        text: root.t-group-activity;
-                        color: AppTheme.accent;
-                        font-size: 12px;
-                        font-weight: 700;
-                    }
-                    Text {
-                        text: root.activity-summary-text;
-                        color: #cfd5db;
-                        font-size: 11px;
-                        wrap: word-wrap;
-                    }
-                    for row in root.activity-rows : Rectangle {
-                        background: #181b1e;
-                        border-radius: 3px;
-                        height: 26px;
-                        HorizontalLayout {
-                            padding-left: 6px;
-                            padding-right: 6px;
-                            spacing: 8px;
-                            Text {
-                                text: row.player_name;
-                                color: #cfd5db;
-                                vertical-alignment: center;
-                                horizontal-stretch: 1;
-                                overflow: elide;
-                            }
-                            Text {
-                                text: row.action;
-                                color: AppTheme.header-fg;
-                                vertical-alignment: center;
-                                width: 80px;
-                            }
-                            Text {
-                                text: row.at;
-                                color: #7c8a93;
-                                vertical-alignment: center;
-                                width: 190px;
+                VerticalBox {
+                    spacing: 8px;
+                    vertical-stretch: 0;
+
+                    Section {
+                        title: root.t-group-players;
+                        horizontal-stretch: 1;
+                        height: 230px;
+                        Text {
+                            text: root.player-rows.length == 0 ? root.t-no-players : root.players-count-text;
+                            color: #cfd5db;
+                            wrap: word-wrap;
+                            vertical-stretch: 0;
+                        }
+                        Text {
+                            text: root.world-proof-text;
+                            color: AppTheme.muted;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                            vertical-stretch: 0;
+                        }
+                        Text {
+                            text: root.t-group-activity;
+                            color: AppTheme.accent;
+                            font-size: 12px;
+                            font-weight: 700;
+                            vertical-stretch: 0;
+                        }
+                        for row in root.activity-rows : Rectangle {
+                            background: #181b1e;
+                            border-radius: 3px;
+                            height: 26px;
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+                                spacing: 8px;
+                                Text {
+                                    text: row.player_name;
+                                    color: #cfd5db;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: row.action;
+                                    color: AppTheme.header-fg;
+                                    vertical-alignment: center;
+                                    width: 80px;
+                                }
+                                Text {
+                                    text: row.at;
+                                    color: #7c8a93;
+                                    vertical-alignment: center;
+                                    width: 190px;
+                                }
                             }
                         }
                     }
-                    for row in root.player-rows : Rectangle {
-                        background: #1a242c;
-                        border-radius: 3px;
-                        height: 30px;
-                        HorizontalLayout {
-                            padding: 6px;
-                            spacing: 8px;
-                            Text {
-                                text: row.player_name;
-                                color: #cfd5db;
-                                vertical-alignment: center;
-                                horizontal-stretch: 1;
-                                overflow: elide;
-                            }
-                            Text {
-                                text: row.joined_at;
-                                color: #7c8a93;
-                                vertical-alignment: center;
-                            }
+                    Section {
+                        title: root.t-group-network;
+                        horizontal-stretch: 1;
+                        vertical-stretch: 0;
+                        height: 84px;
+                        Text {
+                            text: root.network-status-text == "" ? "No network events yet" : root.network-status-text;
+                            color: #cfd5db;
+                            font-size: 11px;
+                            wrap: word-wrap;
                         }
-                    }
-                }
-                Section {
-                    title: root.t-group-network;
-                    horizontal-stretch: 1;
-                    Text {
-                        text: root.network-status-text == "" ? "No network events yet" : root.network-status-text;
-                        color: #cfd5db;
-                        font-size: 11px;
-                        wrap: word-wrap;
                     }
                 }
             }
@@ -1583,7 +1575,7 @@ export component MainWindow inherits Window {
 
         Section {
             title: root.t-group-log;
-            height: 96px;
+            height: 40px;
             TextEdit {
                 text: root.error-text != "" ? root.error-text + "\n" + root.log-text : root.log-text;
                 read-only: true;
