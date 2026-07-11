@@ -364,6 +364,14 @@ impl FactorioServer {
         let cwd = self.config.paths.server_dir.clone();
         let argv = self.build_argv();
         let req = SpawnRequest::new(exe, argv, cwd);
+        let current_log = self.factorio_current_log_path();
+        // Factorio truncates factorio-current.log during startup. Start at the
+        // previous file length so the tailer cannot flood the event channel
+        // with an earlier session before that truncation happens. Once the
+        // file shrinks, logtail resets to zero and reads the new session.
+        let current_log_start_pos = std::fs::metadata(&current_log)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
 
         if let Some(parent) = self.config.paths.log_file.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -376,8 +384,12 @@ impl FactorioServer {
         let (rx, tail_handle) =
             logtail::spawn(LogTailConfig::new(self.config.paths.log_file.clone()));
         let pump_handle = self.spawn_log_pump(rx);
-        let (net_rx, net_tail_handle) =
-            logtail::spawn(LogTailConfig::new(self.factorio_current_log_path()));
+        let (net_rx, net_tail_handle) = logtail::spawn(LogTailConfig {
+            path: current_log,
+            poll_interval: Duration::from_millis(250),
+            channel_capacity: 1024,
+            start_pos: current_log_start_pos,
+        });
         let net_pump_handle = self.spawn_log_pump(net_rx);
         self.spawn_exit_watcher(process.clone(), self.state_path());
         self.spawn_startup_watchdog(process.clone());

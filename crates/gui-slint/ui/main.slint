@@ -92,6 +92,12 @@ component Section inherits VerticalBox {
     }
 }
 
+export struct ModRow {
+    name: string,
+    versions: string,
+    enabled: bool,
+}
+
 component StatusStep inherits Rectangle {
     in property <string> label;
     in property <bool> done;
@@ -1119,6 +1125,9 @@ export component MainWindow inherits Window {
     in-out property <bool> auto-pause: true;
     in-out property <string> mod-dir: "";
     in-out property <string> mod-portal-name: "";
+    in-out property <[string]> mod-portal-versions: [];
+    in-out property <string> mod-portal-version: "";
+    in-out property <[ModRow]> installed-mod-rows: [];
     in-out property <string> detected-mods-text: "";
     in-out property <string> enabled-mods-text: "";
     in-out property <string> simulation-state-text: "";
@@ -1144,7 +1153,10 @@ export component MainWindow inherits Window {
     callback refresh-mods-clicked();
     callback open-mod-dir-clicked();
     callback add-mod-zip-clicked();
+    callback fetch-mod-versions-clicked();
     callback add-mod-portal-clicked();
+    callback remove-mod-clicked();
+    callback installed-mod-selected(string);
 
     // Reusable widths
     property <length> label-w: 168px;
@@ -1622,16 +1634,90 @@ export component MainWindow inherits Window {
                         placeholder-text: "respawn-beacon";
                         horizontal-stretch: 1;
                     }
-                    WideButton { text: root.t-btn-add-mod-portal; clicked => { root.add-mod-portal-clicked(); } }
+                    WideButton {
+                        text: root.language-index == 0 ? "バージョン取得" : "Versions";
+                        clicked => { root.fetch-mod-versions-clicked(); }
+                    }
+                }
+                HorizontalLayout { spacing: 8px;
+                    Text {
+                        text: root.language-index == 0 ? "バージョン:" : "Version:";
+                        color: #cfd5db;
+                        vertical-alignment: center;
+                        width: root.label-w;
+                    }
+                    CompactComboBox {
+                        model: root.mod-portal-versions;
+                        horizontal-stretch: 1;
+                        selected(value) => { root.mod-portal-version = value; }
+                    }
+                    WideButton {
+                        text: root.t-btn-add-mod-portal;
+                        enabled: !root.server-running;
+                        clicked => { root.add-mod-portal-clicked(); }
+                    }
+                    CompactButton {
+                        text: root.language-index == 0 ? "削除" : "Remove";
+                        enabled: !root.server-running;
+                        clicked => { root.remove-mod-clicked(); }
+                    }
                 }
                 HorizontalLayout { spacing: 8px;
                     Text { text: root.t-lbl-detected-mods; color: #cfd5db; vertical-alignment: top; width: root.label-w; }
-                    TextEdit {
-                        text: root.detected-mods-text;
-                        read-only: true;
-                        wrap: word-wrap;
-                        min-height: 80px;
+                    ScrollView {
+                        min-height: 120px;
                         horizontal-stretch: 1;
+                        VerticalBox {
+                            padding: 2px;
+                            spacing: 2px;
+                            for mod in root.installed-mod-rows: Rectangle {
+                                height: 32px;
+                                border-radius: 3px;
+                                border-width: mod.name == root.mod-portal-name ? 1px : 0px;
+                                border-color: AppTheme.accent;
+                                background: mod.name == root.mod-portal-name
+                                    ? AppTheme.accent-soft
+                                    : Palette.alternate-background;
+                                HorizontalBox {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 8px;
+                                    Text {
+                                        text: mod.name;
+                                        color: Palette.foreground;
+                                        font-weight: mod.name == root.mod-portal-name ? 700 : 400;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 2;
+                                    }
+                                    Text {
+                                        text: mod.versions;
+                                        color: AppTheme.muted;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                    Text {
+                                        text: mod.enabled
+                                            ? (root.language-index == 0 ? "有効" : "Enabled")
+                                            : (root.language-index == 0 ? "無効" : "Disabled");
+                                        color: mod.enabled ? AppTheme.ok : AppTheme.warn;
+                                        vertical-alignment: center;
+                                        width: 72px;
+                                    }
+                                }
+                                TouchArea {
+                                    clicked => { root.installed-mod-selected(mod.name); }
+                                }
+                            }
+                            if root.installed-mod-rows.length == 0: Rectangle {
+                                height: 48px;
+                                Text {
+                                    text: root.language-index == 0 ? "インストール済みmodなし" : "No installed mods";
+                                    color: AppTheme.muted;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
                     }
                 }
                 HorizontalLayout { spacing: 8px;
