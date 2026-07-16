@@ -330,7 +330,7 @@ pub const JA: Strings = Strings {
     lbl_enabled_mods: "有効にするmod名:",
     lbl_mod_portal_name: "Mod Portal名:",
     btn_add_mod_zip: "zip追加",
-    btn_add_mod_portal: "追加",
+    btn_add_mod_portal: "インストール / 更新",
     btn_open_mod_dir: "フォルダ",
 
     lbl_preset: "プリセット",
@@ -517,7 +517,7 @@ pub const EN: Strings = Strings {
     lbl_enabled_mods: "Enabled mod names:",
     lbl_mod_portal_name: "Mod Portal name:",
     btn_add_mod_zip: "Add zip",
-    btn_add_mod_portal: "Add",
+    btn_add_mod_portal: "Install / Update",
     btn_open_mod_dir: "Folder",
 
     lbl_preset: "Preset",

@@ -232,7 +232,14 @@ fn main() -> anyhow::Result<()> {
         apply_readme_screenshot_demo(&ui);
     }
 
-    ui.run()?;
+    let ui_result = ui.run();
+    // A blocking process-exit watcher may legitimately live for days while
+    // the dedicated server keeps running. Do not wait for it when the GUI is
+    // closed; dropping the process handle does not terminate Factorio, and a
+    // later GUI instance re-attaches through factorio-state.toml.
+    drop(_guard);
+    rt.shutdown_background();
+    ui_result?;
     Ok(())
 }
 
@@ -764,6 +771,20 @@ fn spawn_event_forwarder(ui: &MainWindow, server: Arc<FactorioServer>, state: Ar
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(lagged = n, "ui event subscriber lagged");
+                    let status = server.status();
+                    {
+                        let mut guard = state.lock().expect("state mutex poisoned");
+                        guard.last_status = status;
+                    }
+                    let weak = weak.clone();
+                    let _ = weak.upgrade_in_event_loop(move |ui| {
+                        let language = translations::language_from_index(ui.get_language_index());
+                        let strings = translations::for_language(language);
+                        ui.set_status_text(translations::status_label(status, strings).into());
+                        let (busy, server_running) = flags_for_status(status);
+                        ui.set_busy(busy);
+                        ui.set_server_running(server_running);
+                    });
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
             }
@@ -1484,20 +1505,14 @@ fn parse_enabled_mods(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn detected_mod_names(mod_dir: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(mod_dir) else {
-        return Vec::new();
-    };
-    let mut names: Vec<String> = entries
-        .flatten()
-        .filter_map(|entry| mod_name_from_zip(&entry.path()))
-        .collect();
-    names.sort_by_key(|name| name.to_ascii_lowercase());
-    names.dedup();
-    names
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ModArchive {
+    name: String,
+    version: String,
+    path: PathBuf,
 }
 
-fn mod_name_from_zip(path: &Path) -> Option<String> {
+fn mod_archive(path: &Path) -> Option<ModArchive> {
     let is_zip = path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -1506,22 +1521,112 @@ fn mod_name_from_zip(path: &Path) -> Option<String> {
         return None;
     }
     let stem = path.file_stem()?.to_string_lossy();
-    Some(
-        stem.rsplit_once('_')
-            .map(|(name, _version)| name)
-            .unwrap_or(&stem)
-            .to_string(),
-    )
+    let (name, version) = stem.rsplit_once('_')?;
+    Some(ModArchive {
+        name: name.to_string(),
+        version: version.to_string(),
+        path: path.to_path_buf(),
+    })
+}
+
+fn detected_mod_archives(mod_dir: &Path) -> Vec<ModArchive> {
+    let Ok(entries) = std::fs::read_dir(mod_dir) else {
+        return Vec::new();
+    };
+    let mut archives: Vec<ModArchive> = entries
+        .flatten()
+        .filter_map(|entry| mod_archive(&entry.path()))
+        .collect();
+    archives.sort_by(|left, right| {
+        left.name
+            .to_ascii_lowercase()
+            .cmp(&right.name.to_ascii_lowercase())
+            .then_with(|| right.version.cmp(&left.version))
+    });
+    archives
+}
+
+fn mod_name_from_zip(path: &Path) -> Option<String> {
+    mod_archive(path).map(|archive| archive.name)
 }
 
 fn refresh_detected_mods(ui: &MainWindow) {
-    let names = detected_mod_names(Path::new(ui.get_mod_dir().as_str()));
-    let text = if names.is_empty() {
+    let enabled: HashSet<String> = parse_enabled_mods(&ui.get_enabled_mods_text())
+        .into_iter()
+        .collect();
+    let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
+    for archive in detected_mod_archives(Path::new(ui.get_mod_dir().as_str())) {
+        grouped
+            .entry(archive.name)
+            .or_default()
+            .push(archive.version);
+    }
+    let mut names: Vec<String> = grouped.keys().cloned().collect();
+    names.sort_by_key(|name| name.to_ascii_lowercase());
+    let rows = names
+        .into_iter()
+        .map(|name| {
+            let versions = grouped.remove(&name).unwrap_or_default().join(", ");
+            ModRow {
+                enabled: enabled.contains(&name),
+                name: name.into(),
+                versions: versions.into(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let text = if rows.is_empty() {
         "(なし)".to_string()
     } else {
-        names.join("\n")
+        rows.iter()
+            .map(|row| {
+                let status = if row.enabled { "enabled" } else { "disabled" };
+                format!("{}  {}  [{status}]", row.name, row.versions)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     };
+    ui.set_installed_mod_rows(slint::ModelRc::from(std::rc::Rc::new(
+        slint::VecModel::from(rows),
+    )));
     ui.set_detected_mods_text(text.into());
+}
+
+fn remove_old_mod_archives(mod_dir: &Path, mod_name: &str, keep: &Path) -> anyhow::Result<usize> {
+    let mut removed = 0;
+    let Ok(entries) = std::fs::read_dir(mod_dir) else {
+        return Ok(removed);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(archive) = mod_archive(&path) else {
+            continue;
+        };
+        if archive.name == mod_name && path != keep {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("remove old mod archive {}", path.display()))?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+fn remove_mod_archives(mod_dir: &Path, mod_name: &str) -> anyhow::Result<usize> {
+    let mut removed = 0;
+    let Ok(entries) = std::fs::read_dir(mod_dir) else {
+        return Ok(removed);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(archive) = mod_archive(&path) else {
+            continue;
+        };
+        if archive.name == mod_name {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("remove mod archive {}", path.display()))?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 fn add_enabled_mod_name(ui: &MainWindow, name: &str) {
@@ -1530,6 +1635,14 @@ fn add_enabled_mod_name(ui: &MainWindow, name: &str) {
         names.push(name.to_string());
         ui.set_enabled_mods_text(names.join("\n").into());
     }
+}
+
+fn remove_enabled_mod_name(ui: &MainWindow, name: &str) {
+    let names = parse_enabled_mods(&ui.get_enabled_mods_text())
+        .into_iter()
+        .filter(|existing| existing != name)
+        .collect::<Vec<_>>();
+    ui.set_enabled_mods_text(names.join("\n").into());
 }
 
 fn pick_mod_zip() -> Option<PathBuf> {
@@ -1547,13 +1660,23 @@ fn install_mod_zip(ui: &MainWindow, source: &Path) -> anyhow::Result<Option<Stri
     let target = mod_dir.join(file_name);
     std::fs::copy(source, &target)
         .with_context(|| format!("copy {} -> {}", source.display(), target.display()))?;
-    Ok(mod_name_from_zip(&target))
+    let name = mod_name_from_zip(&target);
+    if let Some(name) = &name {
+        remove_old_mod_archives(&mod_dir, name, &target)?;
+    }
+    Ok(name)
 }
 
-fn install_mod_from_portal(mod_name: &str, mod_dir: &Path) -> anyhow::Result<String> {
+#[derive(Clone, Debug)]
+struct PortalModRelease {
+    version: String,
+    file_name: String,
+    download_url: String,
+}
+
+fn portal_mod_releases(mod_name: &str) -> anyhow::Result<Vec<PortalModRelease>> {
     let mod_name = mod_name.trim();
     anyhow::ensure!(!mod_name.is_empty(), "mod name is empty");
-    let (username, token) = factorio_service_credentials(mod_dir)?;
     let cache_bust = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis())
@@ -1566,21 +1689,56 @@ fn install_mod_from_portal(mod_name: &str, mod_dir: &Path) -> anyhow::Result<Str
         .into_string()
         .context("read mod portal release information")?;
     let details: serde_json::Value = serde_json::from_str(&details_text)?;
-    let release = details["releases"]
+    let releases = details["releases"]
         .as_array()
-        .and_then(|releases| releases.last())
         .context("mod has no releases")?;
-    let file_name = release["file_name"]
-        .as_str()
-        .context("release has no file_name")?;
-    let download_url = release["download_url"]
-        .as_str()
-        .context("release has no download_url")?;
+    let mut out = Vec::new();
+    for release in releases.iter().rev() {
+        let Some(file_name) = release["file_name"].as_str() else {
+            continue;
+        };
+        let Some(download_url) = release["download_url"].as_str() else {
+            continue;
+        };
+        let version = release["version"]
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| mod_archive(Path::new(file_name)).map(|archive| archive.version));
+        let Some(version) = version else { continue };
+        out.push(PortalModRelease {
+            version,
+            file_name: file_name.to_string(),
+            download_url: download_url.to_string(),
+        });
+    }
+    anyhow::ensure!(!out.is_empty(), "mod has no downloadable releases");
+    Ok(out)
+}
+
+fn install_mod_from_portal(
+    mod_name: &str,
+    version: &str,
+    mod_dir: &Path,
+) -> anyhow::Result<(String, String, usize)> {
+    let mod_name = mod_name.trim();
+    let releases = portal_mod_releases(mod_name)?;
+    let release = if version.trim().is_empty() {
+        releases.first()
+    } else {
+        releases
+            .iter()
+            .find(|release| release.version == version.trim())
+    }
+    .with_context(|| format!("version {} was not found", version.trim()))?;
+    let (username, token) = factorio_service_credentials(mod_dir)?;
 
     std::fs::create_dir_all(mod_dir).with_context(|| format!("create {}", mod_dir.display()))?;
-    let target = mod_dir.join(file_name);
-    let download =
-        format!("https://mods.factorio.com{download_url}?username={username}&token={token}");
+    let target = mod_dir.join(&release.file_name);
+    let partial = target.with_extension("zip.part");
+    let download = format!(
+        "https://mods.factorio.com{}?username={username}&token={token}",
+        release.download_url
+    );
     let mut response = ureq::get(&download)
         .call()
         .map_err(|err| match err {
@@ -1593,15 +1751,23 @@ fn install_mod_from_portal(mod_name: &str, mod_dir: &Path) -> anyhow::Result<Str
         })?
         .into_reader();
     let mut file =
-        std::fs::File::create(&target).with_context(|| format!("create {}", target.display()))?;
+        std::fs::File::create(&partial).with_context(|| format!("create {}", partial.display()))?;
     if let Err(err) = std::io::copy(&mut response, &mut file)
-        .with_context(|| format!("download mod to {}", target.display()))
+        .with_context(|| format!("download mod to {}", partial.display()))
     {
-        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_file(&partial);
         return Err(err);
     }
+    drop(file);
+    if target.exists() {
+        std::fs::remove_file(&target).with_context(|| format!("replace {}", target.display()))?;
+    }
+    std::fs::rename(&partial, &target).with_context(|| format!("install {}", target.display()))?;
 
-    mod_name_from_zip(&target).context("downloaded file name did not look like a mod zip")
+    let installed_name =
+        mod_name_from_zip(&target).context("downloaded file name did not look like a mod zip")?;
+    let removed = remove_old_mod_archives(mod_dir, &installed_name, &target)?;
+    Ok((installed_name, release.version.clone(), removed))
 }
 
 fn factorio_service_credentials(mod_dir: &Path) -> anyhow::Result<(String, String)> {
@@ -1673,26 +1839,121 @@ fn wire_mod_callbacks(ui: &MainWindow) {
     });
 
     let ui_weak = ui.as_weak();
-    ui.on_add_mod_portal_clicked(move || {
+    ui.on_installed_mod_selected(move |name| {
+        if let Some(ui) = ui_weak.upgrade() {
+            ui.set_mod_portal_name(name);
+            ui.set_mod_portal_version("".into());
+            ui.set_mod_portal_versions(slint::ModelRc::default());
+            ui.invoke_fetch_mod_versions_clicked();
+        }
+    });
+
+    wire_mod_version_lookup_callback(ui);
+    wire_mod_install_callback(ui);
+    wire_mod_remove_callback(ui);
+}
+
+fn wire_mod_version_lookup_callback(ui: &MainWindow) {
+    let ui_weak = ui.as_weak();
+    ui.on_fetch_mod_versions_clicked(move || {
         let Some(ui) = ui_weak.upgrade() else { return };
         let mod_name = ui.get_mod_portal_name().to_string();
+        let weak = ui.as_weak();
+        ui.set_error_text(format!("fetching versions: {}", mod_name.trim()).into());
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || portal_mod_releases(&mod_name))
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("version lookup task failed: {e}")));
+            let _ = weak.upgrade_in_event_loop(move |ui| match result {
+                Ok(releases) => {
+                    let versions = releases
+                        .into_iter()
+                        .map(|release| slint::SharedString::from(release.version))
+                        .collect::<Vec<_>>();
+                    let selected = versions.first().cloned().unwrap_or_default();
+                    ui.set_mod_portal_versions(slint::ModelRc::from(std::rc::Rc::new(
+                        slint::VecModel::from(versions),
+                    )));
+                    ui.set_mod_portal_version(selected.clone());
+                    ui.set_error_text(format!("latest version: {selected}").into());
+                }
+                Err(e) => ui.set_error_text(format!("failed to fetch mod versions: {e:#}").into()),
+            });
+        });
+    });
+}
+
+fn wire_mod_install_callback(ui: &MainWindow) {
+    let ui_weak = ui.as_weak();
+    ui.on_add_mod_portal_clicked(move || {
+        let Some(ui) = ui_weak.upgrade() else { return };
+        if ui.get_server_running() {
+            ui.set_error_text("stop the server before installing or updating mods".into());
+            return;
+        }
+        let mod_name = ui.get_mod_portal_name().to_string();
+        let version = ui.get_mod_portal_version().to_string();
         let mod_dir = PathBuf::from(ui.get_mod_dir().as_str());
         let weak = ui.as_weak();
-        ui.set_error_text(format!("downloading mod: {}", mod_name.trim()).into());
+        ui.set_error_text(
+            format!("downloading mod: {} {}", mod_name.trim(), version.trim()).into(),
+        );
         tokio::spawn(async move {
-            let result =
-                tokio::task::spawn_blocking(move || install_mod_from_portal(&mod_name, &mod_dir))
-                    .await
-                    .unwrap_or_else(|e| Err(anyhow::anyhow!("download task failed: {e}")));
+            let result = tokio::task::spawn_blocking(move || {
+                install_mod_from_portal(&mod_name, &version, &mod_dir)
+            })
+            .await
+            .unwrap_or_else(|e| Err(anyhow::anyhow!("download task failed: {e}")));
             let _ = weak.upgrade_in_event_loop(move |ui| match result {
-                Ok(name) => {
+                Ok((name, version, removed)) => {
                     add_enabled_mod_name(&ui, &name);
                     refresh_detected_mods(&ui);
-                    ui.set_error_text(format!("mod downloaded: {name}").into());
+                    ui.set_error_text(
+                        format!(
+                            "mod installed: {name} {version}; removed {removed} old archive(s)"
+                        )
+                        .into(),
+                    );
                 }
                 Err(e) => ui.set_error_text(format!("failed to download mod: {e:#}").into()),
             });
         });
+    });
+}
+
+fn wire_mod_remove_callback(ui: &MainWindow) {
+    let ui_weak = ui.as_weak();
+    ui.on_remove_mod_clicked(move || {
+        let Some(ui) = ui_weak.upgrade() else { return };
+        if ui.get_server_running() {
+            ui.set_error_text("stop the server before removing mods".into());
+            return;
+        }
+        let mod_name = ui.get_mod_portal_name().trim().to_string();
+        if mod_name.is_empty() {
+            ui.set_error_text("enter a mod name to remove".into());
+            return;
+        }
+        let confirmed = rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title("Remove Factorio mod")
+            .set_description(format!(
+                "Remove every installed version of '{mod_name}'?\n\nBack up the save first if this mod created entities in the world."
+            ))
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .show();
+        if confirmed != rfd::MessageDialogResult::Yes {
+            return;
+        }
+        let mod_dir = PathBuf::from(ui.get_mod_dir().as_str());
+        match remove_mod_archives(&mod_dir, &mod_name) {
+            Ok(removed) => {
+                remove_enabled_mod_name(&ui, &mod_name);
+                refresh_detected_mods(&ui);
+                ui.set_error_text(format!("removed {mod_name}: {removed} archive(s)").into());
+            }
+            Err(e) => ui.set_error_text(format!("failed to remove mod: {e:#}").into()),
+        }
     });
 }
 
@@ -1723,6 +1984,12 @@ fn backups_to_rows(
             id: b.id.0.clone().into(),
             timestamp: b.created_at.format("%Y-%m-%d %H:%M:%S").to_string().into(),
             size: format!("{:.2} MiB", b.size_bytes as f64 / (1024.0 * 1024.0)).into(),
+            source: b
+                .dir
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_default()
+                .into(),
             kind: backup_kind_to_int(b.kind),
             selected: selected.contains(&b.id.0),
         })
@@ -2538,6 +2805,41 @@ fn log_line_from(ev: &ServerEvent, t: &Strings) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_mod_archive_name_and_version() {
+        let archive = mod_archive(Path::new("personal-respawn-anchor_0.1.3.zip")).unwrap();
+        assert_eq!(archive.name, "personal-respawn-anchor");
+        assert_eq!(archive.version, "0.1.3");
+        assert!(mod_archive(Path::new("personal-respawn-anchor.zip")).is_none());
+        assert!(mod_archive(Path::new("personal-respawn-anchor_0.1.3.txt")).is_none());
+    }
+
+    #[test]
+    fn removes_only_old_versions_of_the_selected_mod() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("factorio-mod-cleanup-{unique}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = dir.join("personal-respawn-anchor_0.1.2.zip");
+        let keep = dir.join("personal-respawn-anchor_0.1.3.zip");
+        let other = dir.join("respawn-beacon_1.0.0.zip");
+        std::fs::write(&old, []).unwrap();
+        std::fs::write(&keep, []).unwrap();
+        std::fs::write(&other, []).unwrap();
+
+        assert_eq!(
+            remove_old_mod_archives(&dir, "personal-respawn-anchor", &keep).unwrap(),
+            1
+        );
+        assert!(!old.exists());
+        assert!(keep.exists());
+        assert!(other.exists());
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn parses_most_recent_steam_account() {
