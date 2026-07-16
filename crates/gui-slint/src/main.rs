@@ -1984,6 +1984,12 @@ fn backups_to_rows(
             id: b.id.0.clone().into(),
             timestamp: b.created_at.format("%Y-%m-%d %H:%M:%S").to_string().into(),
             size: format!("{:.2} MiB", b.size_bytes as f64 / (1024.0 * 1024.0)).into(),
+            source: b
+                .dir
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_default()
+                .into(),
             kind: backup_kind_to_int(b.kind),
             selected: selected.contains(&b.id.0),
         })

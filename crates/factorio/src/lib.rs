@@ -5,6 +5,7 @@
 
 use anyhow::Context;
 use async_trait::async_trait;
+use chrono::TimeZone;
 use gsm_core::{
     logtail, AppConfig, Backup, BackupId, BackupKind, FactorioDlc, GameServerManager,
     LogTailConfig, ServerEvent, ServerProcess, ServerStatus, SpawnRequest,
@@ -12,7 +13,7 @@ use gsm_core::{
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
@@ -57,6 +58,7 @@ struct RunningInner {
     tails: Vec<JoinHandle<()>>,
     pumps: Vec<JoinHandle<()>>,
     autosave_backup: JoinHandle<()>,
+    started_at: SystemTime,
 }
 
 impl RunningInner {
@@ -225,6 +227,27 @@ impl FactorioServer {
         self.manager_dir.join(STATE_FILE)
     }
 
+    fn rollback_marker_path(&self) -> PathBuf {
+        self.config.paths.save_dir.join(format!(
+            ".{}.rollback-authoritative",
+            self.config.server.world
+        ))
+    }
+
+    fn recover_newer_autosave(&self, not_before: Option<SystemTime>) -> anyhow::Result<()> {
+        let autosave_dir = self.write_data_dir().join("saves");
+        if let Some(autosave) =
+            promote_newer_autosave(&autosave_dir, &self.save_path(), not_before)?
+        {
+            let _ = self.events.send(ServerEvent::Log(format!(
+                "[save] promoted newer autosave {} -> {}",
+                autosave.display(),
+                self.save_path().display()
+            )));
+        }
+        Ok(())
+    }
+
     fn write_state(&self, pid: u32) {
         let state = RunningState { pid };
         match toml::to_string(&state) {
@@ -296,6 +319,7 @@ impl FactorioServer {
         process: Arc<ServerProcess>,
         tails: Vec<JoinHandle<()>>,
         pumps: Vec<JoinHandle<()>>,
+        started_at: SystemTime,
     ) {
         let autosave_backup = spawn_autosave_backup_watcher(
             self.config.clone(),
@@ -307,6 +331,7 @@ impl FactorioServer {
             tails,
             pumps,
             autosave_backup,
+            started_at,
         });
     }
 
@@ -354,10 +379,17 @@ impl FactorioServer {
         Ok(())
     }
 
-    async fn start_after_status_changed(&self) -> anyhow::Result<()> {
+    async fn start_after_status_changed(&self, recover_newer_autosave: bool) -> anyhow::Result<()> {
         self.write_mod_list()?;
         self.write_server_config_ini()?;
         self.write_server_settings()?;
+        if recover_newer_autosave {
+            self.recover_newer_autosave(None)?;
+        } else {
+            let _ = self.events.send(ServerEvent::Log(
+                "[save] preserving explicitly restored save; autosave recovery skipped".into(),
+            ));
+        }
         self.ensure_save_exists().await?;
 
         let exe = self.config.paths.server_dir.join(SERVER_EXE);
@@ -378,6 +410,7 @@ impl FactorioServer {
         }
         let _ = std::fs::File::create(&self.config.paths.log_file);
 
+        let started_at = SystemTime::now();
         let process = Arc::new(ServerProcess::spawn(&req)?);
         self.write_state(process.pid());
 
@@ -397,8 +430,26 @@ impl FactorioServer {
             process,
             vec![tail_handle, net_tail_handle],
             vec![pump_handle, net_pump_handle],
+            started_at,
         );
         Ok(())
+    }
+
+    async fn start_with_autosave_policy(&self, recover_newer_autosave: bool) -> anyhow::Result<()> {
+        if !matches!(self.status(), ServerStatus::Stopped | ServerStatus::Crashed) {
+            anyhow::bail!("server is already running or transitioning");
+        }
+        if let Some(prev) = self.inner.lock().expect("inner mutex poisoned").take() {
+            prev.shutdown();
+        }
+        self.set_status(ServerStatus::Starting);
+        let result = self
+            .start_after_status_changed(recover_newer_autosave)
+            .await;
+        if result.is_err() {
+            self.fail_start();
+        }
+        result
     }
 
     pub async fn backup_with_kind(&self, kind: BackupKind) -> anyhow::Result<Backup> {
@@ -500,6 +551,7 @@ impl FactorioServer {
             process,
             vec![tail_handle, net_tail_handle],
             vec![pump_handle, net_pump_handle],
+            SystemTime::UNIX_EPOCH,
         );
         *self.status.lock().expect("status mutex poisoned") = ServerStatus::Running;
         let _ = self
@@ -531,6 +583,53 @@ impl FactorioServer {
         let _ = self.events.send(ServerEvent::Log(format!(
             "[backup] deleted {}",
             dir.display()
+        )));
+        Ok(())
+    }
+
+    fn validated_rollback_source(&self, id: &BackupId) -> anyhow::Result<(PathBuf, PathBuf, u64)> {
+        let requested_dir = PathBuf::from(&id.0);
+        if !requested_dir.is_dir() {
+            anyhow::bail!("backup directory not found: {}", requested_dir.display());
+        }
+        let backup_root = std::fs::canonicalize(&self.config.paths.backup_dir)
+            .with_context(|| format!("canonicalize {}", self.config.paths.backup_dir.display()))?;
+        let snapshot_dir = std::fs::canonicalize(&requested_dir)
+            .with_context(|| format!("canonicalize {}", requested_dir.display()))?;
+        if !snapshot_dir.starts_with(&backup_root) {
+            anyhow::bail!(
+                "refusing to restore {} (outside backup directory {})",
+                snapshot_dir.display(),
+                backup_root.display()
+            );
+        }
+        let save_src = snapshot_dir.join(format!("{}.zip", self.config.server.world));
+        if !save_src.is_file() {
+            anyhow::bail!("snapshot is missing {}", save_src.display());
+        }
+        let source_size = std::fs::metadata(&save_src)?.len();
+        Ok((snapshot_dir, save_src, source_size))
+    }
+
+    fn copy_rollback_source(&self, save_src: &Path, source_size: u64) -> anyhow::Result<()> {
+        let live_save = self.save_path();
+        if let Some(parent) = live_save.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+        }
+        let copied = std::fs::copy(save_src, &live_save)
+            .with_context(|| format!("copy {} -> {}", save_src.display(), live_save.display()))?;
+        let restored_size = std::fs::metadata(&live_save)?.len();
+        if copied != source_size || restored_size != source_size {
+            anyhow::bail!(
+                "rollback size mismatch: source {source_size}, copied {copied}, restored {restored_size}"
+            );
+        }
+        let _ = self.events.send(ServerEvent::Log(format!(
+            "[rollback] restored {} -> {} ({} bytes)",
+            save_src.display(),
+            live_save.display(),
+            restored_size
         )));
         Ok(())
     }
@@ -655,6 +754,53 @@ fn newest_autosave(dir: &Path) -> Option<(PathBuf, Option<std::time::SystemTime>
         .max_by_key(|(_, modified)| *modified)
 }
 
+fn promote_newer_autosave(
+    autosave_dir: &Path,
+    live_save: &Path,
+    not_before: Option<SystemTime>,
+) -> anyhow::Result<Option<PathBuf>> {
+    let Some((autosave, Some(autosave_modified))) = newest_autosave(autosave_dir) else {
+        return Ok(None);
+    };
+    if not_before.is_some_and(|started| autosave_modified < started) {
+        return Ok(None);
+    }
+    let live_modified = std::fs::metadata(live_save)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok());
+    if live_modified.is_some_and(|modified| modified >= autosave_modified) {
+        return Ok(None);
+    }
+    if let Some(parent) = live_save.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    let expected = std::fs::metadata(&autosave)
+        .with_context(|| format!("stat {}", autosave.display()))?
+        .len();
+    let copied = std::fs::copy(&autosave, live_save).with_context(|| {
+        format!(
+            "promote autosave {} -> {}",
+            autosave.display(),
+            live_save.display()
+        )
+    })?;
+    if copied != expected || std::fs::metadata(live_save)?.len() != expected {
+        anyhow::bail!(
+            "autosave promotion size mismatch: expected {expected} bytes, copied {copied} bytes"
+        );
+    }
+    Ok(Some(autosave))
+}
+
+fn backup_created_at(name: &str, fallback: SystemTime) -> chrono::DateTime<chrono::Local> {
+    name.get(..15)
+        .and_then(|timestamp| {
+            chrono::NaiveDateTime::parse_from_str(timestamp, "%Y%m%d_%H%M%S").ok()
+        })
+        .and_then(|timestamp| chrono::Local.from_local_datetime(&timestamp).single())
+        .unwrap_or_else(|| chrono::DateTime::<chrono::Local>::from(fallback))
+}
+
 fn copy_autosave_backup(config: &AppConfig, autosave: &Path) -> anyhow::Result<Backup> {
     let world = &config.server.world;
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
@@ -749,23 +895,21 @@ impl GameServerManager for FactorioServer {
     }
 
     async fn start(&self) -> anyhow::Result<()> {
-        if !matches!(self.status(), ServerStatus::Stopped | ServerStatus::Crashed) {
-            anyhow::bail!("server is already running or transitioning");
-        }
-        if let Some(prev) = self.inner.lock().expect("inner mutex poisoned").take() {
-            prev.shutdown();
-        }
-        self.set_status(ServerStatus::Starting);
-        let result = self.start_after_status_changed().await;
-        if result.is_err() {
-            self.fail_start();
+        let marker = self.rollback_marker_path();
+        let preserve_restored_save = marker.is_file();
+        let result = self
+            .start_with_autosave_policy(!preserve_restored_save)
+            .await;
+        if result.is_ok() && preserve_restored_save {
+            let _ = std::fs::remove_file(marker);
         }
         result
     }
 
     async fn stop(&self, graceful: bool) -> anyhow::Result<()> {
-        let process = match self.inner.lock().expect("inner mutex poisoned").as_ref() {
-            Some(r) => r.process.clone(),
+        let (process, started_at) = match self.inner.lock().expect("inner mutex poisoned").as_ref()
+        {
+            Some(r) => (r.process.clone(), r.started_at),
             None => return Ok(()),
         };
         self.set_status(ServerStatus::Stopping);
@@ -793,6 +937,7 @@ impl GameServerManager for FactorioServer {
                     .await?;
             if matches!(waited, Ok(Some(_))) {
                 self.cleanup_after_exit();
+                self.recover_newer_autosave(Some(started_at))?;
                 return Ok(());
             }
             let _ = self.events.send(ServerEvent::Warning(
@@ -807,6 +952,7 @@ impl GameServerManager for FactorioServer {
         })
         .await?;
         self.cleanup_after_exit();
+        self.recover_newer_autosave(Some(started_at))?;
         Ok(())
     }
 
@@ -837,15 +983,12 @@ impl GameServerManager for FactorioServer {
                 continue;
             }
             let meta = std::fs::metadata(&save)?;
-            let created_at: chrono::DateTime<chrono::Local> = meta
-                .modified()
-                .ok()
-                .map(chrono::DateTime::<chrono::Local>::from)
-                .unwrap_or_else(chrono::Local::now);
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
+            let created_at =
+                backup_created_at(&name, meta.modified().unwrap_or_else(|_| SystemTime::now()));
             out.push(Backup {
                 id: BackupId(path.to_string_lossy().to_string()),
                 world: world.clone(),
@@ -864,16 +1007,12 @@ impl GameServerManager for FactorioServer {
     }
 
     async fn rollback(&self, id: BackupId) -> anyhow::Result<()> {
-        let snapshot_dir = PathBuf::from(&id.0);
-        if !snapshot_dir.is_dir() {
-            anyhow::bail!("backup directory not found: {}", snapshot_dir.display());
-        }
-
-        let world = &self.config.server.world;
-        let save_src = snapshot_dir.join(format!("{world}.zip"));
-        if !save_src.is_file() {
-            anyhow::bail!("snapshot is missing {}", save_src.display());
-        }
+        let (snapshot_dir, save_src, source_size) = self.validated_rollback_source(&id)?;
+        let _ = self.events.send(ServerEvent::Log(format!(
+            "[rollback] selected {} ({} bytes)",
+            save_src.display(),
+            source_size
+        )));
 
         let was_running = matches!(self.status(), ServerStatus::Running);
         if was_running {
@@ -883,27 +1022,20 @@ impl GameServerManager for FactorioServer {
         }
 
         if self.save_path().is_file() {
-            if let Err(e) = self.backup_with_kind(BackupKind::PreRollback).await {
-                let _ = self.events.send(ServerEvent::Warning(format!(
-                    "pre-rollback snapshot failed: {e:#}; proceeding anyway"
-                )));
-            }
+            self.backup_with_kind(BackupKind::PreRollback)
+                .await
+                .context("pre-rollback snapshot failed; live save was not overwritten")?;
         }
-
-        if let Some(parent) = self.save_path().parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create {}", parent.display()))?;
-        }
-        std::fs::copy(&save_src, self.save_path()).with_context(|| {
-            format!(
-                "copy {} -> {}",
-                save_src.display(),
-                self.save_path().display()
-            )
-        })?;
+        self.copy_rollback_source(&save_src, source_size)?;
 
         if was_running {
-            self.start().await?;
+            self.start_with_autosave_policy(false).await?;
+        } else {
+            std::fs::write(
+                self.rollback_marker_path(),
+                snapshot_dir.display().to_string(),
+            )
+            .context("write rollback authority marker")?;
         }
         Ok(())
     }
@@ -1155,6 +1287,158 @@ mod tests {
         let list = mod_list_for(FactorioDlc::SpaceAge, &["respawn-beacon".to_string()]);
         let json = serde_json::to_string(&list).expect("serialize mod list");
         assert!(json.contains(r#""name":"respawn-beacon","enabled":true"#));
+    }
+
+    #[test]
+    fn promotes_newer_autosave_to_live_save() {
+        let root = unique_test_root("promote-newer");
+        let autosaves = root.join("UserData").join("saves");
+        let live = root.join("Saves").join("Dedicated.zip");
+        std::fs::create_dir_all(&autosaves).expect("create autosaves");
+        std::fs::create_dir_all(live.parent().expect("live parent")).expect("create live dir");
+        std::fs::write(&live, b"old-live").expect("write live");
+        std::thread::sleep(Duration::from_millis(25));
+        let autosave = autosaves.join("_autosave3.zip");
+        std::fs::write(&autosave, b"new-autosave").expect("write autosave");
+
+        let promoted = promote_newer_autosave(&autosaves, &live, None).expect("promote");
+
+        assert_eq!(promoted.as_deref(), Some(autosave.as_path()));
+        assert_eq!(std::fs::read(&live).expect("read live"), b"new-autosave");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn session_guard_does_not_promote_preexisting_autosave() {
+        let root = unique_test_root("session-guard");
+        let autosaves = root.join("UserData").join("saves");
+        let live = root.join("Saves").join("Dedicated.zip");
+        std::fs::create_dir_all(&autosaves).expect("create autosaves");
+        std::fs::create_dir_all(live.parent().expect("live parent")).expect("create live dir");
+        std::fs::write(&live, b"explicit-rollback").expect("write live");
+        std::thread::sleep(Duration::from_millis(25));
+        std::fs::write(autosaves.join("_autosave5.zip"), b"future-autosave")
+            .expect("write autosave");
+        std::thread::sleep(Duration::from_millis(25));
+        let session_started = SystemTime::now();
+
+        let promoted = promote_newer_autosave(&autosaves, &live, Some(session_started))
+            .expect("check promotion");
+
+        assert_eq!(promoted, None);
+        assert_eq!(
+            std::fs::read(&live).expect("read live"),
+            b"explicit-rollback"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn newer_live_save_is_not_replaced() {
+        let root = unique_test_root("keep-live");
+        let autosaves = root.join("UserData").join("saves");
+        let live = root.join("Saves").join("Dedicated.zip");
+        std::fs::create_dir_all(&autosaves).expect("create autosaves");
+        std::fs::write(autosaves.join("_autosave1.zip"), b"old-autosave").expect("write autosave");
+        std::thread::sleep(Duration::from_millis(25));
+        std::fs::create_dir_all(live.parent().expect("live parent")).expect("create live dir");
+        std::fs::write(&live, b"new-live").expect("write live");
+
+        let promoted = promote_newer_autosave(&autosaves, &live, None).expect("check promotion");
+
+        assert_eq!(promoted, None);
+        assert_eq!(std::fs::read(&live).expect("read live"), b"new-live");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn backup_timestamp_comes_from_snapshot_folder() {
+        let fallback = SystemTime::UNIX_EPOCH;
+        let created = backup_created_at("20260716_121044_auto", fallback);
+        assert_eq!(
+            created.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2026-07-16 12:10:44"
+        );
+    }
+
+    #[tokio::test]
+    async fn rollback_restores_exact_snapshot_and_keeps_pre_rollback_copy() {
+        let root = unique_test_root("rollback-exact");
+        let mut cfg = test_config();
+        cfg.paths.save_dir = root.join("Saves");
+        cfg.paths.backup_dir = root.join("Backups");
+        let live = cfg.paths.save_dir.join("Dedicated.zip");
+        let selected_dir = cfg
+            .paths
+            .backup_dir
+            .join("Dedicated")
+            .join("20260716_121044_auto");
+        let selected = selected_dir.join("Dedicated.zip");
+        std::fs::create_dir_all(&selected_dir).expect("create selected backup");
+        std::fs::create_dir_all(&cfg.paths.save_dir).expect("create save dir");
+        std::fs::write(&live, b"current-state").expect("write current live");
+        std::fs::write(&selected, b"selected-state").expect("write selected backup");
+        let server = FactorioServer::new(cfg, root.join("Manager"));
+
+        server
+            .rollback(BackupId(selected_dir.display().to_string()))
+            .await
+            .expect("rollback");
+
+        assert_eq!(
+            std::fs::read(&live).expect("read restored live"),
+            b"selected-state"
+        );
+        assert!(server.rollback_marker_path().is_file());
+        let pre_rollback = std::fs::read_dir(root.join("Backups").join("Dedicated"))
+            .expect("list backups")
+            .flatten()
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with("_pre_rollback")
+            })
+            .expect("pre-rollback backup")
+            .path()
+            .join("Dedicated.zip");
+        assert_eq!(
+            std::fs::read(pre_rollback).expect("read pre-rollback"),
+            b"current-state"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn rollback_rejects_snapshot_outside_backup_root() {
+        let root = unique_test_root("rollback-outside");
+        let mut cfg = test_config();
+        cfg.paths.save_dir = root.join("Saves");
+        cfg.paths.backup_dir = root.join("Backups");
+        std::fs::create_dir_all(&cfg.paths.backup_dir).expect("create backup root");
+        let outside = root.join("Outside");
+        std::fs::create_dir_all(&outside).expect("create outside dir");
+        std::fs::write(outside.join("Dedicated.zip"), b"outside").expect("write outside save");
+        let server = FactorioServer::new(cfg, root.join("Manager"));
+
+        let error = server
+            .rollback(BackupId(outside.display().to_string()))
+            .await
+            .expect_err("outside rollback must fail");
+
+        assert!(error.to_string().contains("outside backup directory"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn unique_test_root(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "factorio-server-maintainer-{label}-{}-{nonce}",
+            std::process::id()
+        ))
     }
 
     fn test_config() -> AppConfig {

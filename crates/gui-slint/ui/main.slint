@@ -41,6 +41,7 @@ export struct BackupRow {
     id: string,
     timestamp: string,
     size: string,
+    source: string,
     // 0=Auto, 1=Manual, 2=PreRollback. Echo of gsm_core::BackupKind.
     kind: int,
     selected: bool,
@@ -527,6 +528,8 @@ export component BackupWindow inherits Window {
     in-out property <bool> sort-desc: true;
     in-out property <string> pending-rollback-id: "";
     in-out property <string> pending-rollback-when: "";
+    in-out property <string> pending-rollback-size: "";
+    in-out property <string> pending-rollback-source: "";
     in-out property <int> pending-delete-list: -1;    // -1 = none
     in-out property <int> pending-delete-count: 0;
 
@@ -875,6 +878,12 @@ export component BackupWindow inherits Window {
                                             clicked => {
                                                 root.pending-rollback-id = row.id;
                                                 root.pending-rollback-when = row.timestamp;
+                                                root.pending-rollback-size = row.size;
+                                                root.pending-rollback-source = row.source;
+                                                root.pending-rollback-size = row.size;
+                                                root.pending-rollback-source = row.source;
+                                                root.pending-rollback-size = row.size;
+                                                root.pending-rollback-source = row.source;
                                             }
                                         }
                                     }
@@ -905,7 +914,8 @@ export component BackupWindow inherits Window {
                 padding: 8px;
                 spacing: 8px;
                 Text {
-                    text: root.t-confirm-rollback + " (" + root.pending-rollback-when + ")";
+                    text: root.t-confirm-rollback + " (" + root.pending-rollback-when + " / "
+                        + root.pending-rollback-size + " / " + root.pending-rollback-source + ")";
                     color: AppTheme.accent;
                     vertical-alignment: center;
                     horizontal-stretch: 1;
@@ -916,6 +926,8 @@ export component BackupWindow inherits Window {
                     clicked => {
                         root.pending-rollback-id = "";
                         root.pending-rollback-when = "";
+                        root.pending-rollback-size = "";
+                        root.pending-rollback-source = "";
                     }
                 }
                 Button {
@@ -925,6 +937,8 @@ export component BackupWindow inherits Window {
                         root.rollback-confirmed(root.pending-rollback-id);
                         root.pending-rollback-id = "";
                         root.pending-rollback-when = "";
+                        root.pending-rollback-size = "";
+                        root.pending-rollback-source = "";
                     }
                 }
             }
